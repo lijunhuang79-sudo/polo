@@ -1,0 +1,9 @@
+{
+  "name": "plc-sim-api",
+  "version": "1.0.0",
+  "description": "PLC Sim API - 后端代理 AI 请求，API Key 仅存服务端",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=18" }
+}

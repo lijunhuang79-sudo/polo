@@ -1,0 +1,55 @@
+Gemini API 连接故障排查与修复总结 (SOP)
+=========================================
+日期: 2026-02-28
+版本: 1.0
+
+1. 问题背景
+-----------
+用户在使用 Gemini API Key 进行连接测试时，频繁遇到“连接失败”或“验证失败”的提示，且无法获取具体的错误原因。主要表现为：
+- 提示 404 Requested entity was not found.
+- 提示 通用的“验证失败”但无详情。
+- 提示 API 响应被拦截 (MAX_TOKENS)。
+
+2. 核心修复总结
+---------------
+针对上述问题，我们进行了以下技术调整：
+
+A. 模型标识符修正 (Model ID Update)
+   - 将过时的 `gemini-3.0-pro-preview` 统一更新为最新的 `gemini-3.1-pro-preview`。
+   - 在连接测试环节，改用更通用的 `gemini-flash-latest` 以提高兼容性和响应速度。
+
+B. 增强型错误诊断 (Enhanced Diagnostics)
+   - 在 UI 界面新增“错误详情”展示区域，直接透传 Google API 返回的原始 JSON 错误信息。
+   - 在 `services/aiGenerator.ts` 中增加了详细的 `console.log` 日志，记录完整的 API 响应结构。
+
+C. 验证逻辑优化 (Validation Logic)
+   - 判定标准放宽：将 `MAX_TOKENS` 状态视为“连接成功”。因为该状态证明 API Key 有效且已成功生成内容（仅因测试长度限制被截断）。
+   - 增加了对 `finishReason` 的细化判断，能够识别安全过滤、配额超限等具体场景。
+
+D. 全局同步 (Global Sync)
+   - 同步更新了 `App.tsx` (前端UI)、`server.js` (后端接口)、`aiGenerator.ts` (服务层) 以及 `ScenarioInput.tsx` (预设选项) 中的模型配置。
+
+3. 标准操作程序 (SOP) - 故障排查步骤
+------------------------------------
+
+步骤 1: 检查模型标识符
+   - 确保代码中使用的模型 ID 符合 Google 最新规范。
+   - 推荐使用：`gemini-3.1-pro-preview` (生产) 或 `gemini-flash-latest` (测试)。
+
+步骤 2: 观察“错误详情”
+   - 如果显示 404: 检查模型名称拼写或该 Key 是否有权访问该模型。
+   - 如果显示 403: 检查 API Key 是否已在 Google Cloud Console 启用 Gemini API 服务，或是否有区域限制。
+   - 如果显示 429: 说明触发了频率限制，需检查配额。
+
+步骤 3: 验证响应结构
+   - 检查 API 返回的 `candidates` 数组。
+   - 只要 `finishReason` 为 `STOP` 或 `MAX_TOKENS`，即可判定 API Key 链路正常。
+
+步骤 4: 浏览器控制台诊断
+   - 按 F12 打开控制台，查看 `Gemini Test Full Response` 打印的完整对象。
+   - 重点查看 `safetyRatings`，确认请求是否因安全策略被拦截。
+
+4. 维护建议
+-----------
+- 定期关注 Google AI Studio 的模型更新公告，及时更新代码中的版本号。
+- 建议在 UI 中保留错误详情显示，以便在 API 环境变动时快速定位。

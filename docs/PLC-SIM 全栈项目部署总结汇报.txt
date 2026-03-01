@@ -1,0 +1,326 @@
+下面是一个可直接用来做 PPT 的结构化概要，你可以按“页（Slide）”复制到 PPT 里，并根据需要增删内容或配图。
+
+---
+
+## Slide 1｜项目部署总结概览
+
+- 项目名称：PLC-SIM 全栈应用部署  
+- 服务器环境：  
+  - Ubuntu（云服务器）  
+  - Nginx 作为前端静态服务 + 反向代理  
+  - Node.js 后端（通过 pm2 托管）  
+- 域名结构：  
+  - `plc-sim.com` → 301 重定向到 `www.plc-sim.com`  
+  - `www.plc-sim.com` → 前端 SPA 应用  
+  - `api.plc-sim.com` → 后端 API 服务  
+- 当前状态：  
+  - HTTPS 全站启用  
+  - 前后端功能正常  
+  - 已启用访问密码保护（Basic Auth）
+
+---
+
+## Slide 2｜整体架构与访问路径
+
+- 架构模式：前后端分离 + Nginx 反向代理  
+- 访问流程：  
+  1. 用户访问 `https://plc-sim.com`  
+  2. 自动 301 跳转至 `https://www.plc-sim.com`  
+  3. Nginx 提供前端静态文件（SPA）  
+  4. 前端通过 `https://api.plc-sim.com` 请求后端 API  
+- 安全与控制：  
+  - 全站 HTTPS（同一套 Let’s Encrypt 证书）  
+  - 前端 + API 均已配置密码访问（Basic Auth）
+
+---
+
+## Slide 3｜本地前端修改内容（1/2）——基础配置
+
+- 前端类型：单页应用（SPA），通过 Nginx 静态托管  
+- 主要修改点：  
+  - 构建输出目录统一为服务器指定目录  
+    - 示例：`/var/www/plc-sim/frontend`  
+  - 前端打包命令与环境：  
+    - 使用 `npm run build` / `yarn build` 生成产物  
+    - 确保构建后目录结构清晰（`index.html` + `assets`）
+- 部署策略：  
+  - 本地打包 → 上传打包结果到服务器指定目录  
+  - 或在服务器上直接拉代码 + 安装依赖 + 构建
+
+> 提示：这里可加一张展示“前端目录结构”的示意图。
+
+---
+
+## Slide 4｜本地前端修改内容（2/2）——后端接口 & 环境
+
+- 前端环境变量/配置中对后端地址的统一调整：  
+  - 将 API 地址指向正式域名  
+    - 示例：`VITE_API_BASE_URL=https://api.plc-sim.com` 或等价配置  
+- 跨域相关：  
+  - 最终通过 Nginx 的同源域名访问，无需在前端做复杂 CORS 配置  
+- 错误处理与路由：  
+  - 确认前端路由为 History 模式（非 Hash）  
+  - 配合 Nginx `try_files` 规则，支持前端路由刷新不 404  
+
+> 在 PPT 中可列出实际使用的环境变量/配置字段，便于以后对比。
+
+---
+
+## Slide 5｜Nginx 总体配置结构
+
+- 配置文件：`/etc/nginx/sites-available/plc-sim.conf`（软链接至 `sites-enabled`）  
+- 关键 server 块：  
+  1. HTTP → HTTPS 重定向（80 端口）  
+  2. `www.plc-sim.com`：前端静态服务（443 端口）  
+  3. `api.plc-sim.com`：后端反向代理（443 端口）  
+- 证书配置：  
+  - 仅使用一套证书目录：  
+    - `/etc/letsencrypt/live/plc-sim.com/`  
+  - 前端和 API 共用 `fullchain.pem` 与 `privkey.pem`  
+
+> 可以在这页画一张简易架构图：Client → Nginx → Frontend / Backend。
+
+---
+
+## Slide 6｜Nginx 配置关键点——HTTP 重定向
+
+- server 块 1：统一入口 & 强制 HTTPS  
+  - 监听 80 端口：  
+    - `listen 80 default_server;`  
+  - 重定向规则：  
+    - 所有 `http://plc-sim.com` / `http://www.plc-sim.com`  
+      → `https://www.plc-sim.com`  
+- 目标：  
+  - 提升安全性（所有访问走 HTTPS）  
+  - 域名规范化，避免重复内容和乱跳转
+
+---
+
+## Slide 7｜Nginx 配置关键点——前端 SPA
+
+- server 块 2：`www.plc-sim.com`  
+- 主要配置要点：  
+  - 监听：`listen 443 ssl http2;`  
+  - 站点根目录：  
+    - `root /var/www/plc-sim/frontend;`  
+    - `index index.html;`  
+  - SPA 路由支持（解决 500 / 重定向死循环问题）：  
+    ```nginx
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    ```  
+  - 静态资源缓存优化：  
+    ```nginx
+    location ~* \.(js|css|png|jpe?g|gif|ico|svg|woff|woff2)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    ```  
+
+> 重点说明：*删除了多余的 `/index.html` 重写逻辑，消除了 500 错误和重定向死循环*。
+
+---
+
+## Slide 8｜Nginx 配置关键点——API 反向代理
+
+- server 块 3：`api.plc-sim.com`  
+- 核心配置：  
+  - 监听 HTTPS：`listen 443 ssl http2;`  
+  - 反向代理到本地 Node.js 服务：  
+    ```nginx
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    ```  
+- 功能说明：  
+  - 实现前端以 `https://api.plc-sim.com` 调用后端  
+  - 保留真实客户端 IP 与协议信息（日志 & 鉴权更准确）
+
+---
+
+## Slide 9｜SSL 证书与 HTTPS 配置
+
+- 证书来源：Let’s Encrypt  
+- 统一证书路径：  
+  - `ssl_certificate     /etc/letsencrypt/live/plc-sim.com/fullchain.pem;`  
+  - `ssl_certificate_key /etc/letsencrypt/live/plc-sim.com/privkey.pem;`  
+- 避免问题：  
+  - 删除/避免使用多套证书路径（之前的冲突源）  
+  - 所有 HTTPS server 块引用同一证书目录  
+- 额外安全配置：  
+  - `include /etc/letsencrypt/options-ssl-nginx.conf;`  
+  - `ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;`
+
+---
+
+## Slide 10｜后端服务（Node.js）与 pm2 管理
+
+- 后端技术栈：Node.js（具体框架：如 Express / Nest 等）  
+- 运行方式：  
+  - 使用 pm2 托管 Node.js 进程，示例：  
+    ```bash
+    pm2 start app.js --name plc-sim-api
+    pm2 save
+    pm2 startup
+    ```  
+- 优点：  
+  - 进程守护：异常退出自动重启  
+  - 开机自启：服务器重启后自动恢复服务  
+  - 日志管理：`pm2 logs` 快速查看 API 日志  
+
+> PPT 中可展示一两个常用 pm2 命令，方便运维。
+
+---
+
+## Slide 11｜访问控制：Basic Auth 密码保护
+
+- 目标：当前阶段仅自用，不对公众开放  
+- 工具：Nginx Basic Auth  
+- 步骤：  
+  1. 创建密码文件：  
+     ```bash
+     sudo apt-get install apache2-utils -y
+     sudo htpasswd -c /etc/nginx/.plc-sim-auth admin
+     ```  
+  2. 在前端 & API 的 server 块中添加：  
+     ```nginx
+     auth_basic "Restricted";
+     auth_basic_user_file /etc/nginx/.plc-sim-auth;
+     ```  
+- 效果：  
+  - 访问 `https://www.plc-sim.com` 和 `https://api.plc-sim.com` 时，浏览器弹出用户名/密码框  
+  - 只有知道账号和密码的用户才能访问前端和接口
+
+---
+
+## Slide 12｜问题排查与关键修复记录
+
+- 前端 500 错误 & 重定向循环  
+  - 原因：Nginx 配置中存在 `/index.html` 重写死循环  
+  - 解决：简化为单一规则：  
+    - `try_files $uri $uri/ /index.html;`  
+- SSL 证书异常 / 配置混乱  
+  - 原因：多个 server 块引用不同证书路径，或重复申请证书  
+  - 解决：统一使用 `/etc/letsencrypt/live/plc-sim.com/`  
+- 访问控制未生效  
+  - 现象：Basic Auth 未弹出密码框  
+  - 排查：  
+    - 核对实际生效的 Nginx 配置（`nginx -T`）  
+    - 确认 `auth_basic` 所在 server 块与访问域名一致  
+    - 检测响应头 `WWW-Authenticate` 返回情况  
+  - 结果：已修复，密码框正常弹出
+
+---
+
+## Slide 13｜当前部署状态与后续建议
+
+- 当前状态：  
+  - 前端 & 后端整体部署完成，访问链路通畅  
+  - Nginx 配置简洁、职责清晰  
+  - HTTPS、重定向、反向代理、密码访问均已生效  
+- 后续可选优化方向：  
+  1. 日志与监控：  
+     - 接入简单监控（如 pm2 monit / 外部监控服务）  
+  2. 自动化部署：  
+     - 使用 Git + CI/CD 自动构建 & 部署前端  
+  3. 正式对外版本规划：  
+     - 保留当前环境作为“内测环境”（继续保留 Basic Auth）  
+     - 将来新建面向用户的正式域名或取消密码、增加应用内账号体系
+
+---
+
+如果你愿意，也可以告诉我你偏好的 PPT 结构（例如：不超过 8 页、更多图少字、或需要英文版），我可以再帮你压缩成一版更适合直接演示的精简版提纲。
+
+从你目前描述和我们一起做过的步骤来看，核心部署事项已经基本覆盖到了，没有明显的大坑遗漏。整体包括：
+
+1. **域名与 DNS**
+   - `plc-sim.com` / `www.plc-sim.com` / `api.plc-sim.com` 解析到服务器公网 IP  
+   - `plc-sim.com` → 301 到 `www.plc-sim.com`
+
+2. **Nginx 与站点结构**
+   - 一个站点配置文件：`/etc/nginx/sites-available/plc-sim.conf`（已链接到 `sites-enabled`）  
+   - 3 个 server：
+     - 80 端口：HTTP → HTTPS 重定向
+     - 443 端口：`www.plc-sim.com` 前端 SPA（`try_files $uri $uri/ /index.html;`，已修复死循环问题）
+     - 443 端口：`api.plc-sim.com` 反向代理到 `127.0.0.1:3000`  
+   - 访问日志 / 错误日志路径已配置
+
+3. **前端（本地和服务器）**
+   - 本地构建产物上传或在服务器构建，落到固定目录（例如 `/var/www/plc-sim/frontend`）  
+   - 前端调用的 API 地址已经指向 `https://api.plc-sim.com`  
+   - 路由模式与 Nginx SPA 配置匹配（刷新不 404）
+
+4. **后端服务**
+   - Node.js 后端在本机 3000 端口提供服务  
+   - 使用 pm2 托管，配置了：
+     - `pm2 start ... --name ...`
+     - `pm2 save`
+     - `pm2 startup`（保证开机自启）
+
+5. **HTTPS / 证书**
+   - 只保留并使用一套证书目录：`/etc/letsencrypt/live/plc-sim.com/`  
+   - 前端和 API server 块都引用这套证书  
+   - 已包含标准的 SSL 强化配置和 `ssl_dhparam`
+
+6. **访问控制**
+   - 通过 `apache2-utils` + `htpasswd` 创建了 `/etc/nginx/.plc-sim-auth`  
+   - 在 `www.plc-sim.com` 和 `api.plc-sim.com` 的 server 中添加了：
+     ```nginx
+     auth_basic "Restricted";
+     auth_basic_user_file /etc/nginx/.plc-sim-auth;
+     ```  
+   - 实测已弹出密码框，认证生效  
+   - IP 白名单方案已主动放弃，只保留密码访问（符合你当前诉求）
+
+---
+
+### 可能还可以检查/补充的细节（可选，不是必须）
+
+这些不是“缺失”，更多是“增强项”，你可以根据需要选择：
+
+1. **防火墙规则**
+   - 确认只开放必要端口：`22`（SSH）、`80`、`443`  
+   - 如果用的是 ufw，大致应该是：
+     ```bash
+     sudo ufw allow OpenSSH
+     sudo ufw allow http
+     sudo ufw allow https
+     sudo ufw enable
+     ```
+
+2. **备份与更新**
+   - 定期备份：
+     - Nginx 配置：`/etc/nginx/sites-available/plc-sim.conf`
+     - SSL 证书（理论上可重签，但配置文件建议有备份）
+     - 前端打包产物（可随时重新构建，风险相对小）
+   - 记录部署步骤（你刚要的 PPT 总结就是很好的文档）
+
+3. **证书自动续期**
+   - 确认证书自动续期任务存在且运行正常（通常是 cron 或 systemd timer）  
+   - 可以跑一遍 dry-run 检查（如果你之后想做，我可以给具体命令和如何看结果）
+
+---
+
+如果你想“严谨一点”确认没有遗漏，可以给我这些信息中的任意一条，我可以帮你做最后的 sanity check：
+
+- `plc-sim.conf` 的最新内容（可以隐藏绝对路径等敏感信息）  
+- 一条前端访问日志和一条 API 访问日志  
+- 当前防火墙状态（例如 `sudo ufw status` 的输出）
+
+但就目前我们确认过的东西来看，用于“自己测试用的内网/私有环境”，部署内容已经是闭环的，没有关键步骤缺失。
+
+---
+
+### 与仓库配置的对应关系（便于后续修改时同步）
+
+- **Nginx 配置**：`deploy/nginx/plc-sim.conf`（HTTP）、`deploy/nginx/plc-sim.ssl.conf`（HTTPS）。汇报中提到的 SPA 规则（`try_files $uri $uri/ /index.html;`）、静态资源缓存、API 反向代理、Basic Auth、统一证书路径均已与本文档一致；Basic Auth 密码文件为 `/etc/nginx/.plc-sim-auth`，建议用户名 `admin`。
+- **前端 API 地址**：构建时使用环境变量 `VITE_APP_API_BASE=https://api.plc-sim.com`（汇报中写为 `VITE_API_BASE_URL` 等价）。示例见项目根目录 `env.production.example`，复制为 `.env.production` 后执行 `npm run build`。
+- **后端**：`backend/server.js`，pm2 进程名与汇报一致：`plc-sim-api`（命令：`pm2 start server.js --name plc-sim-api`）。
+- **部署步骤**：详见 `deploy/README.md` 与 `deploy/Linux服务器部署步骤-大白话.md`；大白话版中的密码设置、pm2 名称已按本汇报同步。
