@@ -21,6 +21,8 @@ const SKIP_LOGIN = (typeof import.meta !== 'undefined' && (import.meta as any).e
   : String(_env.VITE_APP_SKIP_LOGIN) === 'true';
 // 生产环境禁止开发者后门；仅开发或显式 VITE_APP_DEV_BACKDOOR=true 时允许（商用合规）
 const ALLOW_DEV_BACKDOOR = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) || String(_env.VITE_APP_DEV_BACKDOOR) === 'true';
+/** 开发者调试入口密码（仅当 ALLOW_DEV_BACKDOOR 为 true 时有效；可在此修改） */
+const DEV_DEBUG_PASSWORD = 'PoloDebug#2026';
 
 const InitialState: PLCState = {
     inputs: {},
@@ -74,7 +76,7 @@ const App: React.FC = () => {
   }, [aiModel]);
 
   const handleLogin = () => {
-    if (ALLOW_DEV_BACKDOOR && password === 'a') {
+    if (ALLOW_DEV_BACKDOOR && password === DEV_DEBUG_PASSWORD) {
       setIsLoggedIn(true);
       setLoginError("");
       return;
