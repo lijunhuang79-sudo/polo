@@ -11,7 +11,9 @@ import HmiPanel from './components/HmiPanel';
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
 const APP_DISPLAY_NAME = _env.VITE_APP_NAME ?? 'PLC 编程仿真器';
-const APP_DISPLAY_VERSION = _env.VITE_APP_VERSION ?? 'V1.00';
+const APP_DISPLAY_VERSION = _env.VITE_APP_VERSION ?? 'v2.0';
+/** 构建时间（仅在生产构建时注入，开发时为 undefined） */
+const APP_BUILD_TIME = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 const SKIP_LOGIN = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)
   ? String((import.meta as any).env.VITE_APP_SKIP_LOGIN) !== 'false'
   : String(_env.VITE_APP_SKIP_LOGIN) === 'true';
@@ -833,6 +835,9 @@ const App: React.FC = () => {
 
       <footer className="mt-12 py-8 bg-slate-900 text-slate-500 text-center border-t border-slate-800">
          <p className="font-medium">© 2026 {APP_DISPLAY_NAME} {APP_DISPLAY_VERSION}</p>
+         {APP_BUILD_TIME && (
+           <p className="text-xs mt-1 text-slate-500">构建时间：{new Date(APP_BUILD_TIME).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' })}</p>
+         )}
          <p className="text-sm mt-2">Designed & Developed by 黄 Polo</p>
       </footer>
     </div>

@@ -37,7 +37,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             [ -f .env.production ] || cp -n env.production.example .env.production 2>/dev/null || true
-            npm ci --omit=dev
+            npm ci
             npm run build
             mkdir -p "$FRONTEND_WWW"
             rsync -a --delete dist/ "$FRONTEND_WWW/"

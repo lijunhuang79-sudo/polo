@@ -36,13 +36,13 @@ fi
 
 cd "$REPO_ROOT"
 
-# 2. 前端依赖与构建
+# 2. 前端依赖与构建（必须装 devDependencies，否则 vite 等构建工具找不到）
 echo "Installing frontend deps and building..."
 export NODE_ENV=production
 if [ -f .env.production ]; then
   export $(grep -v '^#' .env.production | xargs)
 fi
-npm ci --omit=dev
+npm ci
 npm run build
 
 if [ ! -d dist ]; then
