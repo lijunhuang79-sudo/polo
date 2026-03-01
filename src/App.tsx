@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Cpu, Gauge, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw } from 'lucide-react';
+import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw } from 'lucide-react';
 import { SCENARIOS } from './constants';
 import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic';
 import { validateAndNormalizeSolution } from './services/aiSolutionValidator';
@@ -482,7 +482,7 @@ const App: React.FC = () => {
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-4">
                 <div className="bg-blue-600 p-3 rounded-lg shadow-lg shadow-blue-500/30">
-                    <Gauge size={32} className="text-white" />
+                    <Cog size={32} className="text-white" />
                 </div>
                 <div>
                     <h1 className="text-2xl font-extrabold tracking-tight flex items-center gap-3">
