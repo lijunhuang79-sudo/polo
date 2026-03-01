@@ -1,0 +1,44 @@
+# 仅部署前端（不重启后端）
+# 用于：只想重新构建并发布前端时，在 Actions 页手动 Run workflow
+# 需已配置 DEPLOY_SSH_KEY；服务器上需已有克隆的仓库
+
+name: Deploy Frontend Only
+
+on:
+  workflow_dispatch:
+
+env:
+  DEPLOY_HOST: 213.111.157.18
+  DEPLOY_USER: root
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy frontend via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            REPO_ROOT="/var/www/plc-sim/polo"
+            FRONTEND_WWW="/var/www/plc-sim/polo/frontend"
+            if [ ! -d "$REPO_ROOT/.git" ]; then
+              echo "Repo not cloned. Run full deploy first."
+              exit 1
+            fi
+            cd "$REPO_ROOT"
+            git fetch origin main
+            git reset --hard origin/main
+            [ -f .env.production ] || cp -n env.production.example .env.production 2>/dev/null || true
+            npm ci --omit=dev
+            npm run build
+            mkdir -p "$FRONTEND_WWW"
+            rsync -a --delete dist/ "$FRONTEND_WWW/"
+            echo "Frontend deploy done."

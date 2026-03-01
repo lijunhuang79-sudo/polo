@@ -1,0 +1,60 @@
+# 推送到 main 后自动部署到服务器
+# 仓库: https://github.com/lijunhuang79-sudo/polo
+# 维护: PoloHuang <lijunlhuang79@gmail.com>
+#
+# 使用前在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加：
+#   DEPLOY_SSH_KEY: 服务器 SSH 私钥（完整内容，用于 root@213.111.157.18）
+# 若服务器不是 root@213.111.157.18，请改下面 env 中的 DEPLOY_HOST / DEPLOY_USER。
+
+name: Deploy to PLC-Sim Server
+
+on:
+  push:
+    branches: [main]
+
+env:
+  DEPLOY_HOST: 213.111.157.18
+  DEPLOY_USER: root
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            export REPO_URL="https://github.com/lijunhuang79-sudo/polo.git"
+            export REPO_BRANCH="main"
+            export REPO_ROOT="/var/www/plc-sim/polo"
+            export FRONTEND_WWW="/var/www/plc-sim/polo/frontend"
+            export PM2_APP_NAME="plc-sim-api"
+            if [ ! -d "$REPO_ROOT/.git" ]; then
+              git clone -b "$REPO_BRANCH" "$REPO_URL" "$REPO_ROOT"
+            fi
+            cd "$REPO_ROOT"
+            git fetch origin "$REPO_BRANCH"
+            git reset --hard "origin/$REPO_BRANCH"
+            [ -f .env.production ] || cp -n env.production.example .env.production 2>/dev/null || true
+            npm ci --omit=dev
+            npm run build
+            mkdir -p "$FRONTEND_WWW"
+            rsync -a --delete dist/ "$FRONTEND_WWW/"
+            if [ -d backend ] && [ -f backend/server.js ]; then
+              cd backend
+              if command -v pm2 >/dev/null 2>&1; then
+                pm2 restart plc-sim-api --update-env || pm2 start server.js --name plc-sim-api
+                pm2 save
+              fi
+            fi
+            echo "Deploy done."
