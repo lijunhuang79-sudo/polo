@@ -662,7 +662,7 @@ const App: React.FC = () => {
                 className={`text-white px-8 py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center gap-2 ${isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')}`}
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
-               {isGenerating ? '正在执行调试...' : '执行代码分析'}
+               {isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
              </button>
              <button 
                 onClick={() => {
