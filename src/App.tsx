@@ -7,6 +7,7 @@ import { AI_MODEL_CONFIGS, type AiModelId } from './config/aiModels';
 import { PLCState, GeneratedSolution, LogicConfig } from './types';
 import SimulationPanel from './components/SimulationPanel';
 import HmiPanel from './components/HmiPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
@@ -14,9 +15,12 @@ const APP_DISPLAY_NAME = _env.VITE_APP_NAME ?? 'PLC 编程仿真器';
 const APP_DISPLAY_VERSION = _env.VITE_APP_VERSION ?? 'v2.0';
 /** 构建时间（仅在生产构建时注入，开发时为 undefined） */
 const APP_BUILD_TIME = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
+// 开发模式默认免登录；生产仅当显式 VITE_APP_SKIP_LOGIN=true 时免登录（商用合规）
 const SKIP_LOGIN = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)
   ? String((import.meta as any).env.VITE_APP_SKIP_LOGIN) !== 'false'
   : String(_env.VITE_APP_SKIP_LOGIN) === 'true';
+// 生产环境禁止开发者后门；仅开发或显式 VITE_APP_DEV_BACKDOOR=true 时允许（商用合规）
+const ALLOW_DEV_BACKDOOR = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) || String(_env.VITE_APP_DEV_BACKDOOR) === 'true';
 
 const InitialState: PLCState = {
     inputs: {},
@@ -48,6 +52,8 @@ const App: React.FC = () => {
   const [genError, setGenError] = useState("");
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'fail'>('idle');
   const [testErrorDetail, setTestErrorDetail] = useState('');
+  const [showAgreement, setShowAgreement] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
   // Simulation Loop Refs
   const stateRef = useRef<PLCState>(InitialState);
@@ -68,15 +74,16 @@ const App: React.FC = () => {
   }, [aiModel]);
 
   const handleLogin = () => {
-    // 普通用户密码 HelloPLC 不再起作用，仅保留开发者后门
-    if (password === 'a') {
+    if (ALLOW_DEV_BACKDOOR && password === 'a') {
       setIsLoggedIn(true);
       setLoginError("");
-    } else if (password === 'HelloPLC') {
-      setLoginError("内测期限已过，请确认开发者权限");
-    } else {
-      setLoginError("身份验证失败，请确认调试密钥");
+      return;
     }
+    if (password === 'HelloPLC') {
+      setLoginError("内测期限已过，请确认开发者权限");
+      return;
+    }
+    setLoginError("身份验证失败，请确认调试密钥");
   };
 
   const handleTestConnection = async () => {
@@ -513,6 +520,7 @@ const App: React.FC = () => {
       </header>
 
       <main className="container mx-auto px-4 mt-8 max-w-6xl space-y-8">
+        <ErrorBoundary fallbackTitle="功能加载异常">
         <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-4 gap-4">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -831,6 +839,7 @@ const App: React.FC = () => {
             </section>
           </>
         )}
+      </ErrorBoundary>
       </main>
 
       <footer className="mt-12 py-8 bg-slate-900 text-slate-500 text-center border-t border-slate-800">
@@ -838,8 +847,44 @@ const App: React.FC = () => {
          {APP_BUILD_TIME && (
            <p className="text-xs mt-1 text-slate-500">构建时间：{new Date(APP_BUILD_TIME).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' })}</p>
          )}
+         <p className="text-xs mt-2 text-slate-500 max-w-xl mx-auto">本产品仅供教学/方案参考，不替代实际 PLC 工程验证与安全认证。</p>
+         <p className="text-sm mt-3 flex items-center justify-center gap-4 flex-wrap">
+           <a href="#" onClick={(e) => { e.preventDefault(); setShowAgreement(true); }} className="hover:text-slate-300 underline">用户服务协议</a>
+           <a href="#" onClick={(e) => { e.preventDefault(); setShowPrivacy(true); }} className="hover:text-slate-300 underline">隐私政策</a>
+         </p>
          <p className="text-sm mt-2">Designed & Developed by 黄 Polo</p>
       </footer>
+
+      {showAgreement && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowAgreement(false)}>
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] overflow-auto p-6 text-left text-slate-800 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold mb-4">用户服务协议</h3>
+            <p className="text-sm text-slate-600 mb-4">欢迎使用 PLC 编程仿真器。使用本服务即表示您同意以下条款：</p>
+            <ul className="text-sm text-slate-600 list-disc pl-5 space-y-1 mb-4">
+              <li>本产品仅供教学与方案参考，仿真结果不替代实际 PLC 工程验证与安全认证。</li>
+              <li>禁止将本服务用于任何违法、侵权或违反公序良俗的用途。</li>
+              <li>账号与数据使用规则以平台公示为准；争议解决适用中华人民共和国法律。</li>
+            </ul>
+            <p className="text-xs text-slate-500">完整协议由运营方另行公示，必要时请由法务审阅。</p>
+            <button type="button" className="mt-4 w-full py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm font-medium" onClick={() => setShowAgreement(false)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {showPrivacy && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowPrivacy(false)}>
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] overflow-auto p-6 text-left text-slate-800 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold mb-4">隐私政策</h3>
+            <p className="text-sm text-slate-600 mb-4">我们重视您的隐私。本产品可能收集或使用的信息包括：</p>
+            <ul className="text-sm text-slate-600 list-disc pl-5 space-y-1 mb-4">
+              <li>为提供 AI 生成服务而提交的场景描述等文本；</li>
+              <li>登录与使用记录（如用于安全与产品改进）；</li>
+              <li>若您自行配置 API Key，该信息仅存于本地或按平台说明加密托管，我们不会在日志中记录完整 Key。</li>
+            </ul>
+            <p className="text-xs text-slate-500">数据留存期限、第三方共享及您享有的查阅/删除等权利，以运营方完整隐私政策为准。若面向欧盟用户需考虑 GDPR。</p>
+            <button type="button" className="mt-4 w-full py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm font-medium" onClick={() => setShowPrivacy(false)}>关闭</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
