@@ -14,7 +14,11 @@
    浏览器在发 POST 前会先发 **OPTIONS**（预检）。若 api.plc-sim.com 对 OPTIONS 也要求 Basic 登录并返回 401，浏览器就认为预检失败（不是 2xx），从而拦截后续 POST。  
    **处理**：在 Nginx 里对 OPTIONS 请求免认证并直接返回 204 和 CORS 头（见仓库 `deploy/nginx/plc-sim.ssl.conf` 中 api 的 `location /` 内 `if ($request_method = 'OPTIONS')` 块）。更新配置后需重新拉取并覆盖、再 `nginx -s reload`。
 
-所以**根本原因是「等 AI 的时间太短」或「OPTIONS 预检被 Basic Auth 拦成 401」**：把等待时间调长、并对 OPTIONS 单独返回 204+CORS 后，一般就不会再报。
+4. **401 Unauthorized（未授权）**  
+   页面在 **www.plc-sim.com**，AI 请求却发到 **api.plc-sim.com**，属于跨域。浏览器**不会**把你在 www 输入的 Basic 密码带到 api，所以 api 返回 401。  
+   **处理**：让前端请求**同源**（也走 www），这样一次登录同时覆盖页面和接口。构建时把 `VITE_APP_API_BASE` 设为 **`https://www.plc-sim.com`**（或留空用相对路径），重新 build 并部署。Nginx 里 www 已有 `location /api/` 反代到后端，无需改 Nginx。
+
+所以**根本原因是「等 AI 的时间太短」或「OPTIONS 预检被 Basic Auth 拦成 401」或「API 跨域导致不带 Basic 密码而 401」**：按上面对应处理即可。
 
 下面按「你要在服务器上做什么」一步一步写，你只要会 SSH 登录服务器、会复制粘贴命令即可。
 
