@@ -221,15 +221,26 @@ function readBody(req) {
   });
 }
 
-function send(res, status, data) {
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'https://www.plc-sim.com,https://plc-sim.com,http://localhost:5173,http://127.0.0.1:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const DEFAULT_CORS_ORIGIN = CORS_ORIGINS[0] || 'https://www.plc-sim.com';
+
+function getCorsOrigin(req) {
+  const origin = req.headers?.origin || '';
+  return origin && CORS_ORIGINS.includes(origin) ? origin : DEFAULT_CORS_ORIGIN;
+}
+
+function send(res, req, status, data) {
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', getCorsOrigin(req));
   res.writeHead(status);
   res.end(JSON.stringify(data));
 }
 
-function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function cors(res, req) {
+  res.setHeader('Access-Control-Allow-Origin', getCorsOrigin(req));
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
@@ -238,13 +249,13 @@ const server = http.createServer(async (req, res) => {
   const { pathname } = parseUrl(req.url || '', true);
 
   if (req.method === 'OPTIONS') {
-    cors(res);
+    cors(res, req);
     res.writeHead(204);
     res.end();
     return;
   }
 
-  cors(res);
+  cors(res, req);
 
   if (pathname === '/health' || pathname === '/api/health') {
     res.setHeader('Content-Type', 'application/json');
@@ -257,7 +268,7 @@ const server = http.createServer(async (req, res) => {
     const model = parseUrl(req.url, true).query?.model || 'deepseek';
     const apiKey = getApiKey(model);
     const ok = apiKey ? await testConnection(model, apiKey) : false;
-    send(res, 200, { ok });
+    send(res, req, 200, { ok });
     return;
   }
 
@@ -272,21 +283,21 @@ const server = http.createServer(async (req, res) => {
       : prompt;
 
     if (!prompt.trim()) {
-      send(res, 400, { error: 'Missing prompt or sceneText' });
+      send(res, req, 400, { error: 'Missing prompt or sceneText' });
       return;
     }
 
     const apiKey = getApiKey(model);
     if (!apiKey) {
-      send(res, 503, { error: `API Key not configured for model: ${model}` });
+      send(res, req, 503, { error: `API Key not configured for model: ${model}` });
       return;
     }
 
     try {
       const solution = await generateWithModel(model, apiKey, userPrompt);
-      send(res, 200, solution);
+      send(res, req, 200, solution);
     } catch (err) {
-      send(res, 502, { error: err.message || 'AI request failed' });
+      send(res, req, 502, { error: err.message || 'AI request failed' });
     }
     return;
   }

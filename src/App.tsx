@@ -4,6 +4,7 @@ import { SCENARIOS } from './constants';
 import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic';
 import { validateAndNormalizeSolution } from './services/aiSolutionValidator';
 import { AI_MODEL_CONFIGS, type AiModelId } from './config/aiModels';
+import { backendGenerate } from './services/backendAi';
 import { PLCState, GeneratedSolution, LogicConfig } from './types';
 import SimulationPanel from './components/SimulationPanel';
 import HmiPanel from './components/HmiPanel';
@@ -23,6 +24,12 @@ const SKIP_LOGIN = (typeof import.meta !== 'undefined' && (import.meta as any).e
 const ALLOW_DEV_BACKDOOR = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) || String(_env.VITE_APP_DEV_BACKDOOR) === 'true';
 /** 开发者调试入口密码（仅当 ALLOW_DEV_BACKDOOR 为 true 时有效；可在此修改） */
 const DEV_DEBUG_PASSWORD = 'PoloDebug#2026';
+/** Phase 1：生产环境使用后端 AI 代理，前端不接触 Key；开发可通过 VITE_APP_USE_BACKEND_AI 控制 */
+const USE_BACKEND_AI = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)
+  ? String(_env.VITE_APP_USE_BACKEND_AI) === 'true'
+  : String(_env.VITE_APP_USE_BACKEND_AI) !== 'false';
+/** 后端支持的模型（qwen 暂未接入后端） */
+const BACKEND_MODELS: AiModelId[] = ['deepseek', 'gemini', 'codex'];
 
 const InitialState: PLCState = {
     inputs: {},
@@ -65,6 +72,11 @@ const App: React.FC = () => {
   useEffect(() => {
     if (SKIP_LOGIN) setIsLoggedIn(true);
   }, []);
+
+  // 后端模式下 qwen 未支持，自动切换到 deepseek
+  useEffect(() => {
+    if (USE_BACKEND_AI && !BACKEND_MODELS.includes(aiModel)) setAiModel('deepseek');
+  }, [USE_BACKEND_AI, aiModel]);
 
   useEffect(() => {
     const savedKey = localStorage.getItem(`${aiModel}_key`);
@@ -271,18 +283,26 @@ const App: React.FC = () => {
             setGenError("本地生成失败，请检查输入。");
         }
     } else {
-        if (!apiKey.trim()) {
+        if (!USE_BACKEND_AI && !apiKey.trim()) {
             setGenError(`请先输入 ${AI_MODEL_CONFIGS[aiModel].name} API Key`);
             return;
         }
         setIsGenerating(true);
-        localStorage.setItem(`${aiModel}_key`, apiKey);
+        if (!USE_BACKEND_AI) localStorage.setItem(`${aiModel}_key`, apiKey);
         try {
             const logicHint = detectLogic(scenarioText);
             const aiPrompt = `${scenarioText}\n\n[logic_hints]\n${JSON.stringify(logicHint, null, 2)}`;
             let rawSol: GeneratedSolution;
             try {
-                rawSol = await AI_MODEL_CONFIGS[aiModel].generate(apiKey, aiPrompt);
+                if (USE_BACKEND_AI && BACKEND_MODELS.includes(aiModel)) {
+                    rawSol = await backendGenerate({
+                        model: aiModel as 'deepseek' | 'gemini' | 'codex',
+                        prompt: aiPrompt,
+                        logicHints: logicHint,
+                    });
+                } else {
+                    rawSol = await AI_MODEL_CONFIGS[aiModel].generate(apiKey, aiPrompt);
+                }
             } catch (apiErr: any) {
                 setGenError(`AI 请求失败：${apiErr?.message || String(apiErr)}`);
                 const localSol = generateSolution(logicHint, scenarioText);
@@ -561,11 +581,15 @@ const App: React.FC = () => {
                              }}
                              className="bg-white border border-indigo-200 text-indigo-700 text-xs rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
                          >
-                             {Object.entries(AI_MODEL_CONFIGS).map(([id, cfg]) => (
-                                 <option key={id} value={id}>{cfg.name}{id === 'codex' ? ' (OpenAI)' : ''}</option>
+                             {(USE_BACKEND_AI ? BACKEND_MODELS : (Object.keys(AI_MODEL_CONFIGS) as AiModelId[])).map((id) => (
+                                 <option key={id} value={id}>{AI_MODEL_CONFIGS[id].name}{id === 'codex' ? ' (OpenAI)' : ''}</option>
                              ))}
                          </select>
                      </div>
+                     {USE_BACKEND_AI ? (
+                         <p className="text-sm text-indigo-600">AI 生成由平台提供，无需配置 API Key。</p>
+                     ) : (
+                         <>
                      <div className="flex gap-2">
                          <input 
                             type="password" 
@@ -616,6 +640,8 @@ const App: React.FC = () => {
                               </button>
                           </div>
                      </div>
+                         </>
+                     )}
                  </div>
              )}
 
