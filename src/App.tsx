@@ -28,6 +28,8 @@ const DEV_DEBUG_PASSWORD = 'PoloDebug#2026';
 const USE_BACKEND_AI = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)
   ? String(_env.VITE_APP_USE_BACKEND_AI) === 'true'
   : String(_env.VITE_APP_USE_BACKEND_AI) !== 'false';
+/** 调试用：在浏览器控制台输入 __PLC_USE_BACKEND_AI 可查看当前构建的实际值（true=不显示 Key 输入框，false=显示） */
+if (typeof window !== 'undefined') (window as any).__PLC_USE_BACKEND_AI = USE_BACKEND_AI;
 /** 后端支持的模型（qwen 暂未接入后端） */
 const BACKEND_MODELS: AiModelId[] = ['deepseek', 'gemini', 'codex'];
 
