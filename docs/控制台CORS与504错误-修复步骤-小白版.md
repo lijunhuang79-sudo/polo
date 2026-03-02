@@ -10,7 +10,11 @@
    出现 504 时，Nginx 直接返回错误页，**没有带上「允许跨域」的响应头**，浏览器就会再报一条 CORS 错误。  
    **通俗说**：本来只有「超时」一个问题，但因为错误页没带「允许 www.plc-sim.com 访问」的标记，浏览器再报一层 CORS。
 
-所以**根本原因是「等 AI 的时间太短」**：把「允许等待的时间」调长，AI 正常返回后，CORS 会由后端正常带上，一般就不会再报。
+3. **「preflight request doesn't pass access control check: It does not have HTTP ok status」**  
+   浏览器在发 POST 前会先发 **OPTIONS**（预检）。若 api.plc-sim.com 对 OPTIONS 也要求 Basic 登录并返回 401，浏览器就认为预检失败（不是 2xx），从而拦截后续 POST。  
+   **处理**：在 Nginx 里对 OPTIONS 请求免认证并直接返回 204 和 CORS 头（见仓库 `deploy/nginx/plc-sim.ssl.conf` 中 api 的 `location /` 内 `if ($request_method = 'OPTIONS')` 块）。更新配置后需重新拉取并覆盖、再 `nginx -s reload`。
+
+所以**根本原因是「等 AI 的时间太短」或「OPTIONS 预检被 Basic Auth 拦成 401」**：把等待时间调长、并对 OPTIONS 单独返回 204+CORS 后，一般就不会再报。
 
 下面按「你要在服务器上做什么」一步一步写，你只要会 SSH 登录服务器、会复制粘贴命令即可。
 
@@ -202,6 +206,159 @@ curl -s http://127.0.0.1:3000/health
   pm2 logs plc-sim-api
   ```
 - 若**只剩 CORS**、没有 504：再确认第五步里 CORS_ORIGINS 包含 `https://www.plc-sim.com`，且执行过 `pm2 restart plc-sim-api`。
+
+---
+
+## 修改后仍报错：请按下面逐项验证（在服务器上执行）
+
+控制台**仍然**出现 CORS 和 504，多半是「服务器上实际生效的 Nginx 配置」还没改成 300 秒和 CORS。请 SSH 登录服务器后，**按顺序**做下面检查。
+
+### 验证 1：当前 Nginx 是否已经用上 300 秒和 CORS？
+
+**先确认 Nginx 能正常输出配置**（之前命令没任何反应，多半是 `nginx -T` 失败且错误被吃掉了）。在服务器上**分两步**执行：
+
+**第 1 步：测试配置是否有效**
+
+```bash
+sudo nginx -t
+```
+
+- 若显示 `syntax is ok` 和 `test is successful`：继续第 2 步。
+- 若报错（如 `syntax error` 或 `failed`）：说明配置文件有误，需要先修好再重载；把完整报错贴出来可帮你排查。
+
+**第 2 步：看当前生效的配置里有没有 300 秒和 CORS**
+
+```bash
+sudo nginx -T 2>&1 | grep -E "proxy_read_timeout|Access-Control-Allow-Origin"
+```
+
+（这里用 `2>&1` 而不是 `2>/dev/null`，这样 Nginx 的报错也会显示出来。）
+
+- **若能看到 `proxy_read_timeout 300s` 和 `Access-Control-Allow-Origin`**：说明新配置已生效，问题可能在「后端没起来」或「AI 接口卡住」，继续做**验证 3**。
+- **若看到的还是 `proxy_read_timeout 60s`，或根本没有 `Access-Control-Allow-Origin`**：说明**服务器上的 Nginx 还在用旧配置**，需要按下面**验证 2** 把配置真正更新并重载。
+- **若第 2 步整段命令仍然没有任何输出**：可能是这台机器上的 Nginx 配置里根本没有 `proxy_pass`（例如 API 不在本机、或用了别的反向代理）。请执行下面两条，把终端里的**完整输出**贴出来，便于判断：
+  ```bash
+  which nginx
+  ls -la /etc/nginx/sites-enabled/
+  ```
+
+---
+
+## 若出现「conflicting server name api.plc-sim.com」且 grep 无输出（你当前情况）
+
+说明 **api.plc-sim.com** 被两个启用配置同时定义了（例如 `sites-enabled` 里既有 **api.plc-sim.com** 又有 **plc-sim.conf**），Nginx 只认其中一个，且当前生效的那份**没有** 300 秒和 CORS，所以会 504 + CORS 报错。按下面做即可修复。
+
+### 操作步骤（在服务器上依次执行）
+
+**1. 先拉取仓库最新代码**（确保服务器上的 `deploy/nginx/plc-sim.ssl.conf` 是带 300s 和 CORS 的版本）
+
+```bash
+cd /var/www/plc-sim/polo
+git fetch origin
+git reset --hard origin/main
+```
+
+**2. 去掉重复的 api 配置，只保留一份**
+
+让 **api.plc-sim.com** 只由 **plc-sim.conf** 提供（我们的完整配置在一个文件里），删除对独立文件 `api.plc-sim.com` 的启用：
+
+```bash
+sudo rm /etc/nginx/sites-enabled/api.plc-sim.com
+```
+
+**3. 用仓库里的完整配置覆盖 plc-sim.conf**
+
+```bash
+sudo cp /var/www/plc-sim/polo/deploy/nginx/plc-sim.ssl.conf /etc/nginx/sites-available/plc-sim.conf
+```
+
+**4. 测试并重载 Nginx**
+
+```bash
+sudo nginx -t
+sudo nginx -s reload
+```
+
+**5. 再验证一次（应有输出）**
+
+```bash
+sudo nginx -T 2>&1 | grep -E "proxy_read_timeout|Access-Control-Allow-Origin"
+```
+
+应能看到 `proxy_read_timeout 300s` 和 `Access-Control-Allow-Origin`。然后浏览器强刷（Ctrl+Shift+R）再试 AI 生成。
+
+**若验证时仍然显示 60s**：多半是第 1 步 `git reset --hard origin/main` 因「dubious ownership」失败，服务器上的 `deploy/nginx/plc-sim.ssl.conf` 还是旧版（60s），所以 cp 过去仍是 60s。按下面任选一种方式修：
+
+- **方式 A（推荐）：修好 Git 再拉取、再覆盖**
+  1. 在服务器上执行（解除 Git 对目录归属的报错）：
+     ```bash
+     git config --global --add safe.directory /var/www/plc-sim/polo
+     ```
+  2. 再拉取并覆盖配置：
+     ```bash
+     cd /var/www/plc-sim/polo
+     git fetch origin
+     git reset --hard origin/main
+     grep "proxy_read_timeout" deploy/nginx/plc-sim.ssl.conf
+     ```
+     若能看到 `proxy_read_timeout 300s`，说明仓库里已是新配置，再执行：
+     ```bash
+     sudo cp /var/www/plc-sim/polo/deploy/nginx/plc-sim.ssl.conf /etc/nginx/sites-available/plc-sim.conf
+     sudo nginx -t
+     sudo nginx -s reload
+     ```
+  3. 再跑一次：`sudo nginx -T 2>&1 | grep -E "proxy_read_timeout|Access-Control-Allow-Origin"`，应能看到 300s 和 CORS。
+
+- **方式 B：不依赖 Git，直接在服务器上把 60s 改成 300s**
+  在服务器上执行（把当前已生效的 `plc-sim.conf` 里的 60s 改成 300s）：
+  ```bash
+  sudo sed -i 's/proxy_send_timeout 60s/proxy_send_timeout 300s/g' /etc/nginx/sites-available/plc-sim.conf
+  sudo sed -i 's/proxy_read_timeout 60s/proxy_read_timeout 300s/g' /etc/nginx/sites-available/plc-sim.conf
+  sudo nginx -t
+  sudo nginx -s reload
+  ```
+  然后再验证：`sudo nginx -T 2>&1 | grep proxy_read_timeout`，应出现 300s。CORS 头若仍缺失，可再用 nano 在 **api.plc-sim.com** 的 server 块里（`auth_basic_user_file` 下一行）加上：
+  ```nginx
+  add_header Access-Control-Allow-Origin "https://www.plc-sim.com" always;
+  add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+  add_header Access-Control-Allow-Headers "Content-Type, Authorization" always;
+  ```
+  保存后 `sudo nginx -t` 与 `sudo nginx -s reload`。
+
+**注意**：若你希望继续用独立的 `api.plc-sim.com` 文件而不是合并到 plc-sim.conf，也可以保留 `sites-enabled/api.plc-sim.com`，改为删除 plc-sim.conf 里对 api.plc-sim.com 的 server 块，并只修改 `sites-available/api.plc-sim.com`，在其中加上 300s 和 CORS。上面步骤是「只保留一份、用仓库一文件搞定」的写法，冲突会消失且配置统一。
+
+### 验证 2：把仓库里的配置真正更新到服务器并重载
+
+1. 本机若改过配置，先推送到 Git：`git add -A` → `git commit -m "nginx 300s CORS"` → `git push origin main`。
+2. 在服务器上执行：
+   ```bash
+   cd /var/www/plc-sim/polo
+   git fetch origin
+   git reset --hard origin/main
+   ls /etc/nginx/sites-enabled/
+   ```
+   看 `sites-enabled` 里实际启用的是哪个 conf（如 `plc-sim.ssl.conf` 或 `plc-sim.conf`），然后：
+   ```bash
+   sudo cp /var/www/plc-sim/polo/deploy/nginx/plc-sim.ssl.conf /etc/nginx/sites-available/你看到的那个文件名
+   sudo nginx -t
+   sudo nginx -s reload
+   ```
+3. 再执行一次**验证 1**，确认已出现 `proxy_read_timeout 300s` 和 `Access-Control-Allow-Origin`。
+
+### 验证 3：后端是否在跑、本机能否访问？
+
+```bash
+pm2 list
+curl -s http://127.0.0.1:3000/health
+```
+
+`plc-sim-api` 应为 **online**，curl 应返回 `{"ok":true,...}`。若失败，先 `pm2 start` 或看 `pm2 logs plc-sim-api`。
+
+### 验证 4：浏览器强刷
+
+修改并重载 Nginx 后，在浏览器按 **Ctrl+Shift+R** 强刷，或关掉标签页重新打开 https://www.plc-sim.com 再试 AI 生成。
+
+**总结**：仍报错就先跑验证 1；若不是 300s 和 CORS，按验证 2 覆盖配置并 reload，再验证 3 确认后端，最后验证 4 强刷。
 
 ---
 
