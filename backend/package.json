@@ -1,9 +1,14 @@
 {
   "name": "plc-sim-api",
   "version": "1.0.0",
-  "description": "PLC Sim API - 后端代理 AI 请求，API Key 仅存服务端",
+  "description": "PLC Sim API - 后端代理 AI 请求，Phase 2 用户与计费",
   "private": true,
   "type": "module",
   "main": "server.js",
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.6.0",
+    "jsonwebtoken": "^9.0.2"
+  }
 }

@@ -1,13 +1,14 @@
 /**
  * PLC-Sim API 服务
- * 运行在 3000 端口，供 api.plc-sim.com 反向代理
- * API Key 仅从环境变量读取，永不返回给前端
+ * Phase 1: AI 代理；Phase 2a: 用户鉴权 + 按次扣费
  */
 import http from 'http';
 import { parse as parseUrl } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import * as db from './db.js';
+import * as auth from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dirname, '.env');
@@ -20,6 +21,8 @@ if (existsSync(envPath)) {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
+const NEW_USER_BONUS_POINTS = Math.max(0, parseInt(process.env.NEW_USER_BONUS_POINTS || '10', 10));
+const AI_PRICE_POINTS = Math.max(1, parseInt(process.env.AI_PRICE_POINTS || '1', 10));
 
 const SYSTEM_PROMPT = `You are an expert PLC engineer.
 
@@ -272,31 +275,112 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname === '/api/ai/generate' && req.method === 'POST') {
+  if (pathname === '/api/auth/register' && req.method === 'POST') {
     const body = await readBody(req);
     const payload = parseJsonBody(body);
-    const model = payload?.model || 'deepseek';
-    const prompt = payload?.prompt || payload?.sceneText || '';
-    const logicHints = payload?.logicHints;
+    const email = payload?.email?.trim();
+    const password = payload?.password;
+    if (!email || !password) {
+      send(res, req, 400, { error: 'Missing email or password' });
+      return;
+    }
+    if (db.getUserByEmail(email)) {
+      send(res, req, 409, { error: 'Email already registered' });
+      return;
+    }
+    try {
+      const passwordHash = await auth.hashPassword(password);
+      const userId = db.createUser(email, passwordHash);
+      db.createAccount(userId, 0);
+      db.addPoints(userId, NEW_USER_BONUS_POINTS, 'grant', 'new_user');
+      const user = db.getUserById(userId);
+      const account = db.getAccount(userId);
+      const token = auth.signToken({ userId: user.id });
+      send(res, req, 200, { token, user: { id: user.id, email: user.email }, balance: account.balance_points });
+    } catch (err) {
+      send(res, req, 500, { error: err.message || 'Registration failed' });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/login' && req.method === 'POST') {
+    const body = await readBody(req);
+    const payload = parseJsonBody(body);
+    const email = payload?.email?.trim();
+    const password = payload?.password;
+    if (!email || !password) {
+      send(res, req, 400, { error: 'Missing email or password' });
+      return;
+    }
+    const user = db.getUserByEmail(email);
+    if (!user || !(await auth.verifyPassword(password, user.password_hash))) {
+      send(res, req, 401, { error: 'Invalid email or password' });
+      return;
+    }
+    const account = db.getAccount(user.id);
+    const token = auth.signToken({ userId: user.id });
+    send(res, req, 200, { token, user: { id: user.id, email: user.email }, balance: account ? account.balance_points : 0 });
+    return;
+  }
+
+  if (pathname === '/api/me' && req.method === 'GET') {
+    const token = auth.getBearerToken(req);
+    const payload = token ? auth.verifyToken(token) : null;
+    if (!payload?.userId) {
+      send(res, req, 401, { error: 'Unauthorized' });
+      return;
+    }
+    const user = db.getUserById(payload.userId);
+    const account = db.getAccount(payload.userId);
+    if (!user) {
+      send(res, req, 401, { error: 'User not found' });
+      return;
+    }
+    send(res, req, 200, { user: { id: user.id, email: user.email }, balance: account ? account.balance_points : 0 });
+    return;
+  }
+
+  if (pathname === '/api/ai/generate' && req.method === 'POST') {
+    const token = auth.getBearerToken(req);
+    const payload = token ? auth.verifyToken(token) : null;
+    if (!payload?.userId) {
+      send(res, req, 401, { error: 'Unauthorized', code: 'AUTH_REQUIRED' });
+      return;
+    }
+    const userId = payload.userId;
+    const consume = db.consumePoints(userId, AI_PRICE_POINTS);
+    if (!consume.ok) {
+      send(res, req, 402, { error: 'Insufficient balance', balance: consume.balance, required: AI_PRICE_POINTS });
+      return;
+    }
+
+    const body = await readBody(req);
+    const payloadReq = parseJsonBody(body);
+    const model = payloadReq?.model || 'deepseek';
+    const prompt = payloadReq?.prompt || payloadReq?.sceneText || '';
+    const logicHints = payloadReq?.logicHints;
     const userPrompt = logicHints
       ? `${prompt}\n\n[logic_hints]\n${JSON.stringify(logicHints, null, 2)}`
       : prompt;
 
     if (!prompt.trim()) {
+      db.addPoints(userId, AI_PRICE_POINTS, 'grant', 'refund_missing_prompt');
       send(res, req, 400, { error: 'Missing prompt or sceneText' });
       return;
     }
 
     const apiKey = getApiKey(model);
     if (!apiKey) {
+      db.addPoints(userId, AI_PRICE_POINTS, 'grant', 'refund_no_apikey');
       send(res, req, 503, { error: `API Key not configured for model: ${model}` });
       return;
     }
 
     try {
       const solution = await generateWithModel(model, apiKey, userPrompt);
-      send(res, req, 200, solution);
+      send(res, req, 200, { ...solution, balance_after: consume.balance });
     } catch (err) {
+      db.addPoints(userId, AI_PRICE_POINTS, 'grant', 'refund_ai_failed');
       send(res, req, 502, { error: err.message || 'AI request failed' });
     }
     return;

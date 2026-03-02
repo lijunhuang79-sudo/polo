@@ -5,6 +5,7 @@ import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic'
 import { validateAndNormalizeSolution } from './services/aiSolutionValidator';
 import { AI_MODEL_CONFIGS, type AiModelId } from './config/aiModels';
 import { backendGenerate } from './services/backendAi';
+import { login as backendLogin, register as backendRegister, getMe } from './services/backendAuth';
 import { PLCState, GeneratedSolution, LogicConfig } from './types';
 import SimulationPanel from './components/SimulationPanel';
 import HmiPanel from './components/HmiPanel';
@@ -30,6 +31,7 @@ const USE_BACKEND_AI = (typeof import.meta !== 'undefined' && (import.meta as an
   : String(_env.VITE_APP_USE_BACKEND_AI) !== 'false';
 /** 后端支持的模型（qwen 暂未接入后端） */
 const BACKEND_MODELS: AiModelId[] = ['deepseek', 'gemini', 'codex'];
+const BACKEND_TOKEN_KEY = 'plc_api_token';
 
 const InitialState: PLCState = {
     inputs: {},
@@ -46,6 +48,13 @@ const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  // Phase 2a: 后端用户（仅 USE_BACKEND_AI 时使用）
+  const [apiToken, setApiToken] = useState<string | null>(() => (typeof localStorage !== 'undefined' ? localStorage.getItem(BACKEND_TOKEN_KEY) : null));
+  const [userEmail, setUserEmail] = useState("");
+  const [balance, setBalance] = useState(0);
+  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+  const [emailInput, setEmailInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
 
   // App State
   const [scenarioText, setScenarioText] = useState("");
@@ -68,10 +77,23 @@ const App: React.FC = () => {
   const stateRef = useRef<PLCState>(InitialState);
   const logicRef = useRef<LogicConfig | null>(null);
 
-  // 开发模式默认免登录，直接进入主界面
+  // 开发模式默认免登录，直接进入主界面（Phase 2a 后端模式仍须登录）
   useEffect(() => {
-    if (SKIP_LOGIN) setIsLoggedIn(true);
+    if (SKIP_LOGIN && !USE_BACKEND_AI) setIsLoggedIn(true);
   }, []);
+
+  // Phase 2a: 恢复后端登录态
+  useEffect(() => {
+    if (!USE_BACKEND_AI || !apiToken) return;
+    getMe(apiToken).then(({ user, balance: b }) => {
+      setUserEmail(user.email);
+      setBalance(b);
+      setIsLoggedIn(true);
+    }).catch(() => {
+      localStorage.removeItem(BACKEND_TOKEN_KEY);
+      setApiToken(null);
+    });
+  }, [USE_BACKEND_AI, apiToken]);
 
   // 后端模式下 qwen 未支持，自动切换到 deepseek
   useEffect(() => {
@@ -88,6 +110,22 @@ const App: React.FC = () => {
   }, [aiModel]);
 
   const handleLogin = () => {
+    if (USE_BACKEND_AI) {
+      setLoginError("");
+      const email = emailInput.trim();
+      const pwd = passwordInput;
+      if (!email || !pwd) { setLoginError("请输入邮箱和密码"); return; }
+      const fn = authTab === 'register' ? backendRegister : backendLogin;
+      fn(email, pwd).then(({ token, user, balance: b }) => {
+        localStorage.setItem(BACKEND_TOKEN_KEY, token);
+        setApiToken(token);
+        setUserEmail(user.email);
+        setBalance(b);
+        setIsLoggedIn(true);
+        setLoginError("");
+      }).catch((e) => setLoginError(e.message || '登录失败'));
+      return;
+    }
     if (ALLOW_DEV_BACKDOOR && password === DEV_DEBUG_PASSWORD) {
       setIsLoggedIn(true);
       setLoginError("");
@@ -299,11 +337,30 @@ const App: React.FC = () => {
                         model: aiModel as 'deepseek' | 'gemini' | 'codex',
                         prompt: aiPrompt,
                         logicHints: logicHint,
+                        token: apiToken,
                     });
+                    const res = rawSol as typeof rawSol & { balance_after?: number };
+                    if (typeof res.balance_after === 'number') setBalance(res.balance_after);
                 } else {
                     rawSol = await AI_MODEL_CONFIGS[aiModel].generate(apiKey, aiPrompt);
                 }
             } catch (apiErr: any) {
+                const code = (apiErr as { code?: string }).code;
+                if (code === 'AUTH_REQUIRED') {
+                  localStorage.removeItem(BACKEND_TOKEN_KEY);
+                  setApiToken(null);
+                  setIsLoggedIn(false);
+                  setUserEmail('');
+                  setBalance(0);
+                  setGenError('请重新登录');
+                  return;
+                }
+                if (code === 'INSUFFICIENT_BALANCE') {
+                  const b = (apiErr as { balance?: number }).balance;
+                  if (typeof b === 'number') setBalance(b);
+                  setGenError('余额不足，请充值后再使用 AI 生成');
+                  return;
+                }
                 setGenError(`AI 请求失败：${apiErr?.message || String(apiErr)}`);
                 const localSol = generateSolution(logicHint, scenarioText);
                 setSolution(localSol);
@@ -421,13 +478,13 @@ const App: React.FC = () => {
       <div className="fixed inset-0 bg-slate-900 flex items-center justify-center z-50 p-4">
         <div className="bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-700">
           
-          {/* Expired Header */}
-          <div className="bg-red-600 p-6 text-white flex flex-col items-center justify-center shrink-0">
-             <div className="bg-white/20 p-3 rounded-full mb-3 backdrop-blur-sm">
+          {/* Expired Header 或 Phase 2a 登录标题 */}
+          <div className={`p-6 text-white flex flex-col items-center justify-center shrink-0 ${USE_BACKEND_AI ? 'bg-slate-800' : 'bg-red-600'}`}>
+             <div className={`p-3 rounded-full mb-3 backdrop-blur-sm ${USE_BACKEND_AI ? 'bg-blue-600/30' : 'bg-white/20'}`}>
                  <ShieldAlert className="text-white" size={32} />
              </div>
-             <h2 className="text-2xl font-bold">Beta 内测阶段已结束</h2>
-             <p className="text-red-100 opacity-90 text-sm mt-1">{APP_DISPLAY_NAME} {APP_DISPLAY_VERSION} - 访问受限</p>
+             <h2 className="text-2xl font-bold">{USE_BACKEND_AI ? '登录以使用 AI 生成' : 'Beta 内测阶段已结束'}</h2>
+             <p className={`text-sm mt-1 ${USE_BACKEND_AI ? 'text-slate-400' : 'text-red-100 opacity-90'}`}>{APP_DISPLAY_NAME} {APP_DISPLAY_VERSION}</p>
           </div>
 
           {/* Expiration Notice Area */}
@@ -466,9 +523,23 @@ const App: React.FC = () => {
              </div>
           </div>
 
-          {/* Developer Debug Input Area */}
+          {/* Developer Debug Input Area 或 Phase 2a 邮箱登录/注册 */}
           <div className="p-6 bg-slate-800 shrink-0">
              <div className="max-w-xs mx-auto w-full">
+               {USE_BACKEND_AI ? (
+                 <>
+                   <div className="flex gap-2 mb-3">
+                     <button type="button" onClick={() => setAuthTab('login')} className={`flex-1 py-2 rounded-lg text-sm font-bold ${authTab === 'login' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'}`}>登录</button>
+                     <button type="button" onClick={() => setAuthTab('register')} className={`flex-1 py-2 rounded-lg text-sm font-bold ${authTab === 'register' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'}`}>注册</button>
+                   </div>
+                   <input type="email" placeholder="邮箱" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-3 mb-2 focus:ring-2 focus:ring-blue-500 outline-none" />
+                   <input type="password" placeholder="密码" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-3 mb-3 focus:ring-2 focus:ring-blue-500 outline-none" />
+                   {loginError && <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>}
+                   <button onClick={handleLogin} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg">{authTab === 'register' ? '注册' : '登录'}</button>
+                   <p className="text-xs text-slate-500 text-center mt-2">注册即赠 10 点，可用于 AI 生成</p>
+                 </>
+               ) : (
+                 <>
                 <div className="relative mb-3">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                     <input 
@@ -488,6 +559,8 @@ const App: React.FC = () => {
                     开发者调试入口 (Debug Entry)
                 </button>
                 <p className="text-[10px] text-slate-500 text-center mt-3 uppercase tracking-tighter">System locked. Access for authorized developers only.</p>
+                 </>
+               )}
              </div>
           </div>
         </div>
@@ -513,9 +586,24 @@ const App: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-6">
+                {USE_BACKEND_AI ? (
+                  <>
+                    <div className="text-right hidden md:block">
+                      <div className="text-xs text-slate-400 uppercase tracking-widest">{userEmail || '用户'}</div>
+                      <div className="text-sm font-bold text-amber-400">点数：{balance}</div>
+                    </div>
+                    <button
+                      onClick={() => { localStorage.removeItem(BACKEND_TOKEN_KEY); setApiToken(null); setIsLoggedIn(false); setUserEmail(''); setBalance(0); }}
+                      className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600"
+                    >
+                      退出
+                    </button>
+                  </>
+                ) : (
                 <div className="text-right hidden md:block">
                     <div className="text-xs text-slate-400 uppercase tracking-widest">Logged in as</div>
                 </div>
+                )}
                 <div className="h-10 w-px bg-slate-700 hidden md:block"></div>
                  <div className="flex gap-4 text-sm font-medium">
                      {solution && (

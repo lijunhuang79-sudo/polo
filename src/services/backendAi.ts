@@ -1,6 +1,6 @@
 /**
  * 后端 AI 代理服务
- * Phase 1：前端调用自有后端 /api/ai/generate，不传 API Key，Key 仅存于服务端
+ * Phase 1：无 Key；Phase 2a：带 Token 鉴权，返回余额
  */
 import type { GeneratedSolution } from '../types';
 import type { LogicConfig } from '../types';
@@ -12,17 +12,24 @@ export interface BackendGenerateParams {
   model: 'deepseek' | 'gemini' | 'codex';
   prompt: string;
   logicHints?: Partial<LogicConfig>;
+  token?: string | null;
+}
+
+export interface BackendGenerateResult extends GeneratedSolution {
+  balance_after?: number;
 }
 
 /**
- * 调用后端 /api/ai/generate，不传 API Key
+ * 调用后端 /api/ai/generate；Phase 2a 需传 token
  */
-export async function backendGenerate(params: BackendGenerateParams): Promise<GeneratedSolution> {
-  const { model, prompt, logicHints } = params;
+export async function backendGenerate(params: BackendGenerateParams): Promise<BackendGenerateResult> {
+  const { model, prompt, logicHints, token } = params;
   const url = `${API_BASE}/api/ai/generate`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({
       model,
       prompt,
@@ -32,9 +39,15 @@ export async function backendGenerate(params: BackendGenerateParams): Promise<Ge
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data?.error || `请求失败 ${res.status}`;
-    throw new Error(msg);
+    const err = new Error(msg) as Error & { code?: string; balance?: number };
+    if (res.status === 401) err.code = 'AUTH_REQUIRED';
+    if (res.status === 402) {
+      err.code = 'INSUFFICIENT_BALANCE';
+      err.balance = data?.balance;
+    }
+    throw err;
   }
-  return data as GeneratedSolution;
+  return data as BackendGenerateResult;
 }
 
 /**
