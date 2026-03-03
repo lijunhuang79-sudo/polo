@@ -130,15 +130,15 @@ const SimulationPanel: React.FC<Props> = ({ io, plcState, onToggleInput }) => {
   };
 
   return (
-    <div className="bg-slate-100 p-6 rounded-lg shadow-sm border border-slate-200">
-      <h2 className="text-xl font-bold text-blue-600 mb-6 flex items-center gap-2">
+    <div className="bg-slate-100 p-4 sm:p-6 rounded-lg shadow-sm border border-slate-200">
+      <h2 className="text-lg sm:text-xl font-bold text-blue-600 mb-4 sm:mb-6 flex items-center gap-2">
         <span>4️⃣</span> 现场电气柜仿真 (Interactive Panel)
       </h2>
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-6 sm:gap-8">
         {/* Input Rail */}
-        <div className="relative bg-gradient-to-b from-slate-200 to-slate-300 p-4 rounded-xl border border-slate-400 shadow-inner">
+        <div className="relative bg-gradient-to-b from-slate-200 to-slate-300 p-3 sm:p-4 rounded-xl border border-slate-400 shadow-inner">
              <div className="absolute top-2 left-2 text-xs font-bold text-slate-500 uppercase tracking-widest">Input Rail (DI)</div>
-             <div className="flex gap-4 overflow-x-auto pb-2 pt-6 px-2">
+             <div className="flex gap-3 sm:gap-4 overflow-x-auto pb-2 pt-6 px-2 -mx-1 sm:mx-0" style={{ WebkitOverflowScrolling: 'touch' }}>
                  {inputs.map(p => (
                      <DeviceCard 
                         key={p.addr} 
@@ -155,9 +155,9 @@ const SimulationPanel: React.FC<Props> = ({ io, plcState, onToggleInput }) => {
         </div>
 
         {/* Output Rail */}
-        <div className="relative bg-gradient-to-b from-slate-800 to-slate-900 p-4 rounded-xl border border-slate-700 shadow-inner">
+        <div className="relative bg-gradient-to-b from-slate-800 to-slate-900 p-3 sm:p-4 rounded-xl border border-slate-700 shadow-inner">
              <div className="absolute top-2 left-2 text-xs font-bold text-slate-400 uppercase tracking-widest">Output Rail (DO)</div>
-             <div className="flex gap-4 overflow-x-auto pb-2 pt-6 px-2">
+             <div className="flex gap-3 sm:gap-4 overflow-x-auto pb-2 pt-6 px-2 -mx-1 sm:mx-0" style={{ WebkitOverflowScrolling: 'touch' }}>
                  {outputs.map(p => (
                      <DeviceCard 
                         key={p.addr} 

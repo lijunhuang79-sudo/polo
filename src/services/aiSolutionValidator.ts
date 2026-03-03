@@ -1,4 +1,5 @@
 import { GeneratedSolution, LogicConfig, IOPoint, HardwareItem } from '../types';
+import { generateSolution } from './plcLogic';
 
 const DEFAULT_LOGIC: LogicConfig = {
   hasStartStop: false,
@@ -118,4 +119,87 @@ export function validateAndNormalizeSolution(raw: unknown): { valid: true; sol: 
 
   const valid = (Array.isArray(raw.io) && raw.io.length > 0) || (isString(raw.stlCode) && raw.stlCode.length > 20);
   return valid ? { valid: true, sol } : { valid: false, error: 'AI 返回的 io 或程序内容缺失，已用本地方案兜底' };
+}
+
+/** 判断程序代码是否视为“空”（缺失或占位） */
+function isCodeEmpty(s: string): boolean {
+  if (!s || typeof s !== 'string') return true;
+  const t = s.trim();
+  if (t.length < 20) return true;
+  if (/无\s*STL|无\s*LAD|无\s*SCL|mock|placeholder|todo|请检查|please\s*check|暂无|未生成/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * 结果检查：确保 STL/LAD/SCL 三者均有有效内容，缺则用本地 generateSolution 补全（不改变 io/hardware）。
+ */
+export function ensureProgramComplete(
+  sol: GeneratedSolution,
+  logic: LogicConfig,
+  scenarioText: string
+): GeneratedSolution {
+  const needStl = isCodeEmpty(sol.stlCode);
+  const needLad = isCodeEmpty(sol.ladCode);
+  const needScl = isCodeEmpty(sol.sclCode);
+  if (!needStl && !needLad && !needScl) return sol;
+
+  const local = generateSolution(logic, scenarioText);
+  return {
+    ...sol,
+    stlCode: needStl ? local.stlCode : sol.stlCode,
+    ladCode: needLad ? local.ladCode : sol.ladCode,
+    sclCode: needScl ? local.sclCode : sol.sclCode,
+  };
+}
+
+/**
+ * 结果检查：确保 BOM 与 I/O 清单对应，缺项则按 I/O 推导并合并（不删原有项，只补缺）。
+ */
+export function ensureBomMatchesIo(io: IOPoint[], hardware: HardwareItem[]): HardwareItem[] {
+  const lower = (s: string) => (s ?? '').toLowerCase();
+  const hasName = (key: string) => hardware.some((h) => lower(h.name).includes(key));
+
+  const required: HardwareItem[] = [];
+
+  if (!hasName('plc') && !hasName('cpu')) {
+    required.push({ name: 'PLC CPU 主机', model: 'CPU 224XP (或同级 S7-1200)', qty: 1, spec: 'DC/DC/DC, 14DI/10DO', note: '核心控制器', required: true });
+  }
+  if (!hasName('开关电源')) {
+    required.push({ name: '开关电源', model: 'LRS-50-24', qty: 1, spec: 'In: 220VAC, Out: 24VDC 2.2A', note: 'PLC及传感器供电', required: true });
+  }
+
+  const diCount = io.filter((p) => p.type === 'DI').length;
+  const doCount = io.filter((p) => p.type === 'DO').length;
+
+  const buttonLike = io.filter((p) => p.type === 'DI' && /start|stop|btn|按钮|启动|停止|开关/i.test(lower(p.symbol) + lower(p.device))).length;
+  const sensorLike = io.filter((p) => p.type === 'DI' && /sens|limit|lmt|感应|限位|光电/i.test(lower(p.symbol) + lower(p.device))).length;
+  const contactorLike = io.filter((p) => p.type === 'DO' && /km|接触器|contactor/i.test(lower(p.symbol) + lower(p.device))).length;
+  const lampLike = io.filter((p) => p.type === 'DO' && /l_|light|灯|led/i.test(lower(p.symbol) + lower(p.device))).length;
+
+  if (buttonLike > 0 && !hasName('按钮') && !hasName('开关')) {
+    required.push({ name: '按钮 (NO/NC)', model: 'LA38-11', qty: Math.max(1, buttonLike), spec: '常开/常闭', note: '启停等输入', required: true });
+  }
+  if (sensorLike > 0 && !hasName('感应') && !hasName('传感器') && !hasName('限位')) {
+    required.push({ name: '传感器/限位开关', model: 'NPN/NO', qty: Math.max(1, sensorLike), spec: '接近/光电', note: '位置或计数反馈', required: false });
+  }
+  if (contactorLike > 0 && !hasName('接触器')) {
+    required.push({ name: '交流接触器', model: 'LC1-D18', qty: Math.max(1, contactorLike), spec: '18A, AC220V Coil', note: '电机/负载控制', required: true });
+  }
+  if (lampLike > 0 && !hasName('指示灯') && !hasName('灯')) {
+    required.push({ name: '指示灯', model: 'AD16-22', qty: Math.max(1, lampLike), spec: '24V', note: '输出状态指示', required: false });
+  }
+
+  if (doCount > 0 && !hasName('接触器') && !hasName('继电器') && contactorLike === 0) {
+    required.push({ name: '继电器/接触器', model: '参考负载选型', qty: Math.max(1, doCount), spec: '24V 线圈', note: 'DO 驱动', required: false });
+  }
+  if (!hasName('端子') && !hasName('接线')) {
+    required.push({ name: '接线端子排', model: 'UK-2.5B', qty: Math.max(10, diCount + doCount + 4), spec: '2.5mm²', note: 'IO接线', required: false });
+  }
+
+  const merged = [...hardware];
+  for (const r of required) {
+    const exists = merged.some((h) => lower(h.name).includes(lower(r.name).slice(0, 4)));
+    if (!exists) merged.push(r);
+  }
+  return merged;
 }

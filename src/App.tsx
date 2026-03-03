@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw } from 'lucide-react';
+import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import { SCENARIOS } from './constants';
 import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic';
-import { validateAndNormalizeSolution } from './services/aiSolutionValidator';
+import { validateAndNormalizeSolution, ensureProgramComplete, ensureBomMatchesIo } from './services/aiSolutionValidator';
+import { inferLogicFromSolution } from './services/inferLogicFromSolution';
 import { AI_MODEL_CONFIGS, type AiModelId } from './config/aiModels';
 import { backendGenerate } from './services/backendAi';
 import { PLCState, GeneratedSolution, LogicConfig } from './types';
@@ -65,6 +66,8 @@ const App: React.FC = () => {
   const [testErrorDetail, setTestErrorDetail] = useState('');
   const [showAgreement, setShowAgreement] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [scenariosExpanded, setScenariosExpanded] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   // Simulation Loop Refs
   const stateRef = useRef<PLCState>(InitialState);
@@ -331,30 +334,35 @@ const App: React.FC = () => {
                 sol = validated.sol;
             }
             const aiLogic = (sol.logicConfig || {}) as Partial<LogicConfig>;
+            // 方案一：从 I/O 与代码推断 HMI 类型，不增加 token，使设备仿真监控能对上 AI 生成方案
+            const inferredLogic = inferLogicFromSolution(sol.io, sol.stlCode, sol.sclCode);
             const mergedLogic: LogicConfig = {
               ...aiLogic,
               ...logicHint,
-              // 对于布尔标志：规则识别与 AI 任一方为 true 即取 true，避免 AI 抹掉规则识别结果
-              hasStartStop: !!(aiLogic.hasStartStop || logicHint.hasStartStop),
-              hasInterlock: !!(aiLogic.hasInterlock || logicHint.hasInterlock),
-              hasDelayOn: !!(aiLogic.hasDelayOn || logicHint.hasDelayOn),
-              hasDoublePressStart: !!(aiLogic.hasDoublePressStart || logicHint.hasDoublePressStart),
-              hasCounting: !!(aiLogic.hasCounting || logicHint.hasCounting),
-              hasTrafficLight: !!(aiLogic.hasTrafficLight || logicHint.hasTrafficLight),
-              hasSequencer: !!(aiLogic.hasSequencer || logicHint.hasSequencer),
-              hasEmergency: !!(aiLogic.hasEmergency || logicHint.hasEmergency),
-              hasLighting: !!(aiLogic.hasLighting || logicHint.hasLighting),
-              hasMultiModeLighting: !!(aiLogic.hasMultiModeLighting || logicHint.hasMultiModeLighting),
-              hasMotor: !!(aiLogic.hasMotor || logicHint.hasMotor),
-              hasPump: !!(aiLogic.hasPump || logicHint.hasPump),
-              hasStarDelta: !!(aiLogic.hasStarDelta || logicHint.hasStarDelta),
-              hasGarageDoor: !!(aiLogic.hasGarageDoor || logicHint.hasGarageDoor),
-              hasMixingTank: !!(aiLogic.hasMixingTank || logicHint.hasMixingTank),
-              hasElevator: !!(aiLogic.hasElevator || logicHint.hasElevator),
-              hasPID: !!(aiLogic.hasPID || logicHint.hasPID),
+              ...inferredLogic,
+              // 对于布尔标志：规则识别、AI 返回、推断结果任一方为 true 即取 true
+              hasStartStop: !!(aiLogic.hasStartStop || logicHint.hasStartStop || inferredLogic.hasStartStop),
+              hasInterlock: !!(aiLogic.hasInterlock || logicHint.hasInterlock || inferredLogic.hasInterlock),
+              hasDelayOn: !!(aiLogic.hasDelayOn || logicHint.hasDelayOn || inferredLogic.hasDelayOn),
+              hasDoublePressStart: !!(aiLogic.hasDoublePressStart || logicHint.hasDoublePressStart || inferredLogic.hasDoublePressStart),
+              hasCounting: !!(aiLogic.hasCounting || logicHint.hasCounting || inferredLogic.hasCounting),
+              hasTrafficLight: !!(aiLogic.hasTrafficLight || logicHint.hasTrafficLight || inferredLogic.hasTrafficLight),
+              hasSequencer: !!(aiLogic.hasSequencer || logicHint.hasSequencer || inferredLogic.hasSequencer),
+              hasEmergency: !!(aiLogic.hasEmergency || logicHint.hasEmergency || inferredLogic.hasEmergency),
+              hasLighting: !!(aiLogic.hasLighting || logicHint.hasLighting || inferredLogic.hasLighting),
+              hasMultiModeLighting: !!(aiLogic.hasMultiModeLighting || logicHint.hasMultiModeLighting || inferredLogic.hasMultiModeLighting),
+              hasMotor: !!(aiLogic.hasMotor || logicHint.hasMotor || inferredLogic.hasMotor),
+              hasPump: !!(aiLogic.hasPump || logicHint.hasPump || inferredLogic.hasPump),
+              hasStarDelta: !!(aiLogic.hasStarDelta || logicHint.hasStarDelta || inferredLogic.hasStarDelta),
+              hasGarageDoor: !!(aiLogic.hasGarageDoor || logicHint.hasGarageDoor || inferredLogic.hasGarageDoor),
+              hasMixingTank: !!(aiLogic.hasMixingTank || logicHint.hasMixingTank || inferredLogic.hasMixingTank),
+              hasElevator: !!(aiLogic.hasElevator || logicHint.hasElevator || inferredLogic.hasElevator),
+              hasPID: !!(aiLogic.hasPID || logicHint.hasPID || inferredLogic.hasPID),
               scenarioType: logicHint.scenarioType !== 'general'
                 ? logicHint.scenarioType
-                : (aiLogic.scenarioType || 'general'),
+                : (aiLogic.scenarioType && aiLogic.scenarioType !== 'general'
+                  ? aiLogic.scenarioType
+                  : (inferredLogic.scenarioType !== 'general' ? inferredLogic.scenarioType! : 'general')),
             };
             let enrichedSol: GeneratedSolution = { ...sol, logicConfig: mergedLogic };
             // 规则识别出双次启动但 AI 未返回时，用本地生成的程序替换，保证展示代码与仿真一致
@@ -362,6 +370,10 @@ const App: React.FC = () => {
               const localSol = generateSolution(mergedLogic, scenarioText);
               enrichedSol = { ...enrichedSol, stlCode: localSol.stlCode, ladCode: localSol.ladCode, sclCode: localSol.sclCode };
             }
+            // 结果检查：确保 STL/LAD/SCL 均有有效内容，缺则用本地生成补全
+            enrichedSol = ensureProgramComplete(enrichedSol, mergedLogic, scenarioText);
+            // 结果检查：确保 BOM 与 I/O 对应，缺项则按 I/O 推导并合并
+            enrichedSol = { ...enrichedSol, hardware: ensureBomMatchesIo(enrichedSol.io, enrichedSol.hardware) };
             setSolution(enrichedSol);
             logicRef.current = mergedLogic;
             const newInputs: Record<string, boolean> = {};
@@ -498,44 +510,44 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen pb-12 bg-slate-50">
-      <header className="bg-slate-900 text-white py-6 shadow-xl border-b-4 border-blue-500">
-        <div className="container mx-auto px-4">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-4">
-                <div className="bg-blue-600 p-3 rounded-lg shadow-lg shadow-blue-500/30">
-                    <Cog size={32} className="text-white" />
+    <div className="min-h-screen min-h-[100dvh] bg-slate-50 pb-[max(3rem,env(safe-area-inset-bottom))]">
+      <header className="bg-slate-900 text-white py-4 sm:py-6 shadow-xl border-b-4 border-blue-500 pt-[env(safe-area-inset-top)]">
+        <div className="container mx-auto px-3 sm:px-4 max-w-6xl">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                <div className="bg-blue-600 p-2 sm:p-3 rounded-lg shadow-lg shadow-blue-500/30 shrink-0">
+                    <Cog size={28} className="text-white sm:w-8 sm:h-8" />
                 </div>
-                <div>
-                    <h1 className="text-2xl font-extrabold tracking-tight flex items-center gap-3">
-                        {APP_DISPLAY_NAME}
-                        <span className="bg-blue-600 text-xs px-2 py-0.5 rounded-full border border-blue-400 font-mono">{APP_DISPLAY_VERSION}</span>
+                <div className="min-w-0">
+                    <h1 className="text-lg sm:text-2xl font-extrabold tracking-tight flex flex-wrap items-center gap-2 sm:gap-3 truncate">
+                        <span className="truncate">{APP_DISPLAY_NAME}</span>
+                        <span className="bg-blue-600 text-xs px-2 py-0.5 rounded-full border border-blue-400 font-mono shrink-0">{APP_DISPLAY_VERSION}</span>
                     </h1>
                 </div>
             </div>
             
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3 sm:gap-6 w-full md:w-auto justify-center md:justify-end flex-wrap">
                 <div className="text-right hidden md:block">
                     <div className="text-xs text-slate-400 uppercase tracking-widest">Logged in as</div>
                 </div>
                 <div className="h-10 w-px bg-slate-700 hidden md:block"></div>
-                 <div className="flex gap-4 text-sm font-medium">
+                 <div className="flex gap-2 sm:gap-4 text-xs sm:text-sm font-medium flex-wrap justify-center">
                      {solution && (
                          <button 
                             onClick={handleExportReport}
-                            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-all shadow-lg hover:shadow-blue-500/40 active:scale-95 border border-blue-500"
+                            className="flex items-center gap-1.5 px-3 sm:px-4 py-2.5 sm:py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-all shadow-lg hover:shadow-blue-500/40 active:scale-95 border border-blue-500 touch-manipulation min-h-[44px]"
                          >
-                            <Download size={16} /> 导出方案
+                            <Download size={16} /> <span className="whitespace-nowrap">导出方案</span>
                          </button>
                      )}
-                     <div className="flex items-center gap-1.5 text-yellow-400 ml-2">
-                       <Zap size={16} /> 智能生成
+                     <div className="flex items-center gap-1.5 text-yellow-400 ml-0 sm:ml-2">
+                       <Zap size={16} /> <span className="hidden sm:inline">智能生成</span>
                      </div>
                      <div className="flex items-center gap-1.5 text-green-400">
-                       <Activity size={16} /> 逻辑仿真
+                       <Activity size={16} /> <span className="hidden sm:inline">逻辑仿真</span>
                      </div>
                      <div className="flex items-center gap-1.5 text-purple-400">
-                       <LayoutTemplate size={16} /> 交互视窗
+                       <LayoutTemplate size={16} /> <span className="hidden sm:inline">交互视窗</span>
                      </div>
                 </div>
             </div>
@@ -543,24 +555,24 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 mt-8 max-w-6xl space-y-8">
+      <main className="container mx-auto px-3 sm:px-4 mt-4 sm:mt-8 max-w-6xl space-y-4 sm:space-y-8">
         <ErrorBoundary fallbackTitle="功能加载异常">
-        <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-4 gap-4">
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <span className="bg-blue-100 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">01</span> 
+        <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-4 gap-3 sm:gap-4">
+              <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">01</span> 
                 场景需求描述
               </h2>
-              <div className="flex bg-slate-100 p-1 rounded-lg">
+              <div className="flex bg-slate-100 p-1 rounded-lg w-full md:w-auto">
                   <button 
                     onClick={() => setGenMode('local')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${genMode === 'local' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'local' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     <HardDrive size={16} /> 本地生成
                   </button>
                   <button 
                     onClick={() => setGenMode('ai')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     <Bot size={16} /> AI 智能生成
                   </button>
@@ -569,10 +581,10 @@ const App: React.FC = () => {
 
           <div className="space-y-4">
              {genMode === 'ai' && (
-                 <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100 mb-4 animate-in fade-in slide-in-from-top-2">
-                     <div className="flex items-center justify-between mb-2">
+                 <div className="bg-indigo-50 p-3 sm:p-4 rounded-lg border border-indigo-100 mb-4 animate-in fade-in slide-in-from-top-2">
+                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                          <div className="flex items-center gap-2">
-                             <Key size={16} className="text-indigo-600" />
+                             <Key size={16} className="text-indigo-600 shrink-0" />
                              <span className="text-sm font-bold text-indigo-700">AI 模型配置</span>
                          </div>
                          <select
@@ -581,7 +593,7 @@ const App: React.FC = () => {
                                  setAiModel(e.target.value as AiModelId);
                                  setTestStatus('idle');
                              }}
-                             className="bg-white border border-indigo-200 text-indigo-700 text-xs rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-500 font-bold"
+                             className="bg-white border border-indigo-200 text-indigo-700 text-xs rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-indigo-500 font-bold w-full sm:w-auto min-h-[44px] sm:min-h-0"
                          >
                              {(USE_BACKEND_AI ? BACKEND_MODELS : (Object.keys(AI_MODEL_CONFIGS) as AiModelId[])).map((id) => (
                                  <option key={id} value={id}>{AI_MODEL_CONFIGS[id].name}{id === 'codex' ? ' (OpenAI)' : ''}</option>
@@ -592,19 +604,19 @@ const App: React.FC = () => {
                          <p className="text-sm text-indigo-600">AI 生成由平台提供，无需配置 API Key。</p>
                      ) : (
                          <>
-                     <div className="flex gap-2">
+                     <div className="flex flex-col sm:flex-row gap-2">
                          <input 
                             type="password" 
                             disabled={false} 
                             value={apiKey}
                             onChange={(e) => { setApiKey(e.target.value); setTestStatus('idle'); setTestErrorDetail(''); }}
                             placeholder={AI_MODEL_CONFIGS[aiModel].placeholder}
-                            className="flex-1 px-4 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white text-slate-800" 
+                            className="flex-1 min-w-0 px-4 py-2.5 sm:py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white text-slate-800 min-h-[44px] sm:min-h-0" 
                          />
                          <button
                             onClick={handleTestConnection}
                             disabled={testStatus === 'testing' || !apiKey}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all border whitespace-nowrap min-w-[100px] flex justify-center items-center ${
+                            className={`px-4 py-2.5 sm:py-2 rounded-lg text-sm font-bold transition-all border whitespace-nowrap min-w-[100px] flex justify-center items-center touch-manipulation min-h-[44px] sm:min-h-0 ${
                                 testStatus === 'success' ? 'bg-green-100 text-green-700 border-green-200' : 
                                 testStatus === 'fail' ? 'bg-red-100 text-red-700 border-red-200' :
                                 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'
@@ -649,13 +661,13 @@ const App: React.FC = () => {
 
              <div className="relative">
                 <textarea 
-                    className={`w-full border rounded-lg p-4 text-lg focus:ring-2 outline-none transition-shadow min-h-[120px] ${genMode === 'ai' ? 'border-indigo-200 focus:ring-indigo-500' : 'border-slate-300 focus:ring-blue-500'} bg-white text-slate-800`} 
+                    className={`w-full border rounded-lg p-3 sm:p-4 text-base sm:text-lg focus:ring-2 outline-none transition-shadow min-h-[100px] sm:min-h-[120px] ${genMode === 'ai' ? 'border-indigo-200 focus:ring-indigo-500' : 'border-slate-300 focus:ring-blue-500'} bg-white text-slate-800`} 
                     rows={3}
                     placeholder="请输入控制逻辑描述..."
                     value={scenarioText}
                     onChange={(e) => setScenarioText(e.target.value)}
                 />
-                <div className="absolute bottom-3 right-3 text-xs text-slate-400">
+                <div className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 text-xs text-slate-400">
                     {genMode === 'ai' ? `${AI_MODEL_CONFIGS[aiModel].name} 强力驱动` : '支持自然语言解析'}
                 </div>
              </div>
@@ -667,27 +679,42 @@ const App: React.FC = () => {
               </div>
           )}
           
-          <div className="mt-4 bg-slate-50 p-4 rounded-lg border border-slate-100">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">⚡ 典型场景示例:</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {SCENARIOS.map((item, idx) => (
-                <button 
-                  key={idx}
-                  onClick={() => setScenarioText(item.text)}
-                  className="text-left text-sm text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm px-3 py-2 rounded transition-all truncate"
-                  title={item.text}
-                >
-                  • {item.title}
-                </button>
-              ))}
-            </div>
+          <div className="mt-4 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setScenariosExpanded((v) => !v)}
+              className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-bold text-slate-600 hover:bg-slate-100/80 transition-colors touch-manipulation min-h-[44px]"
+              aria-expanded={scenariosExpanded}
+            >
+              <span className="flex items-center gap-2">
+                {scenariosExpanded ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
+                <span className="uppercase tracking-wider text-slate-500">⚡ 典型场景示例</span>
+              </span>
+              <span className="text-xs text-slate-400 font-normal">{scenariosExpanded ? '点击收起' : '点击展开'}</span>
+            </button>
+            {scenariosExpanded && (
+              <div className="px-4 pb-4 pt-0 border-t border-slate-100">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-3">
+                  {SCENARIOS.map((item, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setScenarioText(item.text)}
+                      className="text-left text-sm text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm px-3 py-2.5 rounded transition-all truncate touch-manipulation min-h-[44px]"
+                      title={item.text}
+                    >
+                      • {item.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="mt-6 flex gap-3">
+          <div className="mt-6 flex flex-col sm:flex-row gap-3">
              <button 
                 onClick={handleGenerate}
                 disabled={isGenerating}
-                className={`text-white px-8 py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center gap-2 ${isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')}`}
+                className={`text-white px-6 sm:px-8 py-3 sm:py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 touch-manipulation min-h-[48px] ${isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')}`}
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
                {isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
@@ -700,7 +727,7 @@ const App: React.FC = () => {
                   setPlcState(JSON.parse(JSON.stringify(InitialState)));
                   stateRef.current = JSON.parse(JSON.stringify(InitialState));
                 }}
-                className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-6 py-2.5 rounded-lg font-medium transition-colors"
+                className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-6 py-3 sm:py-2.5 rounded-lg font-medium transition-colors touch-manipulation min-h-[48px]"
              >
                重置工作区
              </button>
@@ -709,13 +736,13 @@ const App: React.FC = () => {
 
         {solution && (
           <>
-            <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
-                <span className="bg-blue-100 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">02</span> 
+            <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+               <h2 className="text-base sm:text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
+                <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">02</span> 
                 I/O 分配表 (Input/Output)
                </h2>
-               <div className="overflow-x-auto border rounded-lg">
-                 <table className="w-full text-left text-sm">
+               <div className="overflow-x-auto -mx-2 sm:mx-0 border rounded-lg overflow-y-visible" style={{ WebkitOverflowScrolling: 'touch' }}>
+                 <table className="w-full text-left text-xs sm:text-sm min-w-[600px]">
                    <thead className="bg-slate-50 text-slate-700 font-semibold uppercase tracking-wider text-xs">
                      <tr>
                        <th className="p-3 border-b">地址 (Addr)</th>
@@ -751,36 +778,74 @@ const App: React.FC = () => {
                  </table>
                </div>
             </section>
-            <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-4 gap-4">
-                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <span className="bg-blue-100 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">03</span> 
+            <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+               <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-4 gap-3 sm:gap-4">
+                 <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">03</span> 
                     PLC 程序逻辑 (Program)
                  </h2>
-                 <div className="flex bg-slate-100 p-1 rounded-lg self-start">
+                 <div className="flex flex-wrap items-center gap-2">
+                   <div className="flex bg-slate-100 p-1 rounded-lg overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
                     <button 
                       onClick={() => setCodeTab('STL')}
-                      className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${codeTab === 'STL' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-3 sm:px-4 py-2 sm:py-1.5 rounded-md text-xs sm:text-sm font-bold transition-all shrink-0 touch-manipulation min-h-[44px] sm:min-h-0 ${codeTab === 'STL' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       语句表 (STL)
                     </button>
                     <button 
                       onClick={() => setCodeTab('LAD')}
-                      className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${codeTab === 'LAD' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-3 sm:px-4 py-2 sm:py-1.5 rounded-md text-xs sm:text-sm font-bold transition-all shrink-0 touch-manipulation min-h-[44px] sm:min-h-0 ${codeTab === 'LAD' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       梯形图 (LAD)
                     </button>
                     <button 
                       onClick={() => setCodeTab('SCL')}
-                      className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${codeTab === 'SCL' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-3 sm:px-4 py-2 sm:py-1.5 rounded-md text-xs sm:text-sm font-bold transition-all shrink-0 touch-manipulation min-h-[44px] sm:min-h-0 ${codeTab === 'SCL' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       结构化文本 (SCL)
                     </button>
                  </div>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     const stl = solution.stlCode || '';
+                     const lad = solution.ladCode || '';
+                     const scl = solution.sclCode || '';
+                     const isEmpty = (s: string) => !s || s.trim().length < 20 || /mock|placeholder|todo|请检查|please/i.test(s);
+                     let code: string;
+                     if (isEmpty(stl) && isEmpty(lad) && isEmpty(scl)) {
+                       const t = scenarioText.toLowerCase();
+                       const title = `// 场景：${scenarioText}\n`;
+                       if (/红绿灯|交通灯|信号灯|traffic/i.test(t)) {
+                         const c = title + `NETWORK 1: 启动\nA     I0.0\n=     M0.0\n\nNETWORK 2: 周期 12s\nLD    M0.0\nTON   T37, 120\n\nNETWORK 3: 红灯 0-5s\nA     M0.0\nAW<   T37, 50\n=     Q0.0\n\nNETWORK 4: 黄灯 5-7s\nAW>=  T37, 50\nAW<   T37, 70\n=     Q0.1\n\nNETWORK 5: 绿灯 7-12s\nAW>=  T37, 70\n=     Q0.2`;
+                         const ladCode = title + `Network 1: |--[ I0.0 ]--( M0.0 )--|\nNetwork 2: |--[ M0.0 ]--( TON T37, 12s )--|\nNetwork 3: |--[ M0.0 ]--[ T37<5s ]--( Q0.0 )--|\nNetwork 4: |--[ T37>=5s ]--[ T37<7s ]--( Q0.1 )--|\nNetwork 5: |--[ T37>=7s ]--( Q0.2 )--|`;
+                         const sclCode = title + `"M0.0" := "I0.0";\n"T37".TON(IN := "M0.0", PT := T#12s);\n"Q0.0" := "M0.0" AND "T37".ET < T#5s;\n"Q0.1" := "T37".ET >= T#5s AND "T37".ET < T#7s;\n"Q0.2" := "T37".ET >= T#7s;`;
+                         code = codeTab === 'STL' ? c : (codeTab === 'LAD' ? ladCode : sclCode);
+                       } else {
+                         const defStl = title + `NETWORK 1: 启停自锁\nA     I0.0\nO     M0.0\nAN    I0.1\n=     M0.0\n\nNETWORK 2: 输出\nA     M0.0\nAN    I0.1\n=     Q0.0`;
+                         const defLad = title + `Network 1: |--[ I0.0 ]--O--[ M0.0 ]--/ [ I0.1 ]--( M0.0 )--|\nNetwork 2: |--[ M0.0 ]--/ [ I0.1 ]--( Q0.0 )--|`;
+                         const defScl = title + `"M0.0" := ("I0.0" OR "M0.0") AND NOT "I0.1";\n"Q0.0" := "M0.0" AND NOT "I0.1";`;
+                         code = codeTab === 'STL' ? defStl : (codeTab === 'LAD' ? defLad : defScl);
+                       }
+                     } else {
+                       code = codeTab === 'STL' ? stl : (codeTab === 'LAD' ? lad : scl);
+                     }
+                     navigator.clipboard.writeText(code).then(() => {
+                       setCopySuccess(true);
+                       setTimeout(() => setCopySuccess(false), 2000);
+                     });
+                   }}
+                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors shrink-0 touch-manipulation min-h-[44px] sm:min-h-0"
+                   title="复制当前代码到剪贴板"
+                 >
+                   <Copy size={16} />
+                   {copySuccess ? '已复制' : '复制代码'}
+                 </button>
+                 </div>
                </div>
                <div className="relative">
                    <div className="absolute top-0 left-0 bottom-0 w-8 bg-slate-800 rounded-l-lg border-r border-slate-700"></div>
-                   <pre className="bg-slate-900 text-green-400 p-4 pl-12 rounded-lg font-mono text-sm overflow-auto max-h-[500px] border border-slate-700 shadow-inner leading-relaxed">
+                   <pre className="bg-slate-900 text-green-400 p-3 sm:p-4 pl-10 sm:pl-12 rounded-lg font-mono text-xs sm:text-sm overflow-auto max-h-[400px] sm:max-h-[500px] border border-slate-700 shadow-inner leading-relaxed">
                      {(() => {
                        const stl = solution.stlCode || '';
                        const lad = solution.ladCode || '';
@@ -806,13 +871,13 @@ const App: React.FC = () => {
                </div>
             </section>
 
-            <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <div className="flex justify-between items-center flex-wrap gap-3 mb-4">
-                 <h2 className="text-lg font-bold text-slate-800">04. 现场电气柜仿真</h2>
+            <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center flex-wrap gap-3 mb-4">
+                 <h2 className="text-base sm:text-lg font-bold text-slate-800">04. 现场电气柜仿真</h2>
                  <button
                    type="button"
                    onClick={handleSimulationReset}
-                   className="flex items-center gap-2 px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-lg text-sm font-bold transition-colors shrink-0"
+                   className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-600 hover:bg-slate-700 text-white rounded-lg text-sm font-bold transition-colors shrink-0 touch-manipulation min-h-[44px]"
                  >
                    <RotateCcw size={16} />
                    复位
@@ -829,13 +894,13 @@ const App: React.FC = () => {
               logic={solution.logicConfig} 
             />
             </section>
-            <section className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-               <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
-                <span className="bg-blue-100 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">06</span> 
+            <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+               <h2 className="text-base sm:text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
+                <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">06</span> 
                 物料清单 (BOM)
                </h2>
-               <div className="overflow-x-auto border rounded-lg">
-                 <table className="w-full text-left text-sm">
+               <div className="overflow-x-auto -mx-2 sm:mx-0 border rounded-lg" style={{ WebkitOverflowScrolling: 'touch' }}>
+                 <table className="w-full text-left text-xs sm:text-sm min-w-[500px]">
                    <thead className="bg-slate-50 text-slate-700 font-semibold uppercase tracking-wider text-xs">
                      <tr>
                        <th className="p-3 border-b w-16">序号</th>
@@ -872,8 +937,8 @@ const App: React.FC = () => {
       </ErrorBoundary>
       </main>
 
-      <footer className="mt-12 py-8 bg-slate-900 text-slate-500 text-center border-t border-slate-800">
-         <p className="font-medium">© 2026 {APP_DISPLAY_NAME} {APP_DISPLAY_VERSION}</p>
+      <footer className="mt-8 sm:mt-12 py-6 sm:py-8 px-3 sm:px-4 bg-slate-900 text-slate-500 text-center border-t border-slate-800 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+         <p className="font-medium text-sm sm:text-base">© 2026 {APP_DISPLAY_NAME} {APP_DISPLAY_VERSION}</p>
          {APP_BUILD_TIME && (
            <p className="text-xs mt-1 text-slate-500">构建时间：{new Date(APP_BUILD_TIME).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' })}</p>
          )}
