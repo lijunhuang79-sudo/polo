@@ -57,6 +57,8 @@ const DEFAULT_QR_LINK = 'http://xhslink.com/o/Jn4l2Jo6PI';
 const _baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.BASE_URL) || '/';
 const _defaultPaymentImg = (_baseUrl.endsWith('/') ? _baseUrl : _baseUrl + '/') + 'alipay-payment.png';
 const ALIPAY_QR_IMAGE = (_env.VITE_APP_ALIPAY_QR_IMAGE && String(_env.VITE_APP_ALIPAY_QR_IMAGE).trim()) || _defaultPaymentImg;
+/** 是否本地访问：仅 localhost/127.0.0.1 显示「模拟到账」按钮；生产环境由管理员用本地脚本控制 */
+const IS_LOCALHOST = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
 const InitialState: PLCState = {
     inputs: {},
@@ -233,7 +235,7 @@ const App: React.FC = () => {
         setOrderError('支付已到账，但授权信息尚未生成，请稍候再点「查看订单状态」或联系客服。');
       }
     } else {
-      setOrderError('订单尚未支付，请完成支付后再查询。若已线下付款，可点击下方「模拟到账」进行联调。');
+      setOrderError(IS_LOCALHOST ? '订单尚未支付，请完成支付后再查询。若已线下付款，可点击下方「模拟到账」进行联调。' : '订单尚未支付，请完成支付后由管理员确认到账，再点击「查看订单状态」。');
     }
   };
 
@@ -1256,7 +1258,11 @@ const App: React.FC = () => {
                 </div>
                 <p className="text-xs text-slate-600 text-center mb-2">请使用支付宝扫一扫上方收款码，按订单金额（{purchaseProductType === 'basic' ? '9.9' : '19.9'} 元）付款</p>
                 <p className="text-sm text-amber-700 mb-2">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
-                <p className="text-sm text-blue-700 mb-4 font-medium">若您已用支付宝完成付款：当前未接入支付回调，请点击下方「模拟到账」补发授权码，将自动弹出激活码。</p>
+                {IS_LOCALHOST ? (
+                  <p className="text-sm text-blue-700 mb-4 font-medium">若您已用支付宝完成付款：当前未接入支付回调，请点击下方「模拟到账」补发授权码，将自动弹出激活码。</p>
+                ) : (
+                  <p className="text-sm text-slate-600 mb-4">完成付款后由管理员在本地确认到账，您再点击「查看订单状态」即可获取激活码。</p>
+                )}
                 {orderError && <p className="text-sm text-red-600 mb-2">{orderError}</p>}
                 <div className="flex flex-col gap-2">
                   <div className="flex gap-2">
@@ -1265,9 +1271,11 @@ const App: React.FC = () => {
                     </button>
                     <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
                   </div>
-                  <button type="button" onClick={handleSimulateCallback} disabled={simulatingCallback} className="py-2 rounded-lg text-sm border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50">
-                    {simulatingCallback ? '处理中...' : '已线下付款，模拟到账（联调）'}
-                  </button>
+                  {IS_LOCALHOST && (
+                    <button type="button" onClick={handleSimulateCallback} disabled={simulatingCallback} className="py-2 rounded-lg text-sm border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50">
+                      {simulatingCallback ? '处理中...' : '已线下付款，模拟到账（联调）'}
+                    </button>
+                  )}
                 </div>
               </>
             )}
