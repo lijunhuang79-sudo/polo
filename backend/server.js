@@ -56,7 +56,7 @@ if (existsSync(envPath)) {
   });
 }
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3001;
 
 const SYSTEM_PROMPT = `You are an expert PLC engineer.
 
@@ -452,26 +452,18 @@ const server = http.createServer(async (req, res) => {
     const productType = payload?.productType || payload?.product_type;
     const basicLicenseKey = (payload?.basicLicenseKey || payload?.basic_license_key || '').trim();
 
+    console.log('[order/create] 收到请求 productType=%s basicLicenseKey=%s', productType, basicLicenseKey ? '有' : '无');
+
     if (productType !== 'basic' && productType !== 'ai_week') {
       send(res, req, 400, { code: 'INVALID_PRODUCT', message: 'productType 须为 basic 或 ai_week' });
       return;
     }
 
-    if (productType === 'ai_week') {
-      if (!basicLicenseKey) {
-        send(res, req, 400, { code: 'BASIC_REQUIRED', message: '请先购买并激活基础版' });
-        return;
-      }
-      const license = findBasicLicenseByKey(basicLicenseKey);
-      if (!license) {
-        send(res, req, 400, { code: 'BASIC_REQUIRED', message: '请先购买并激活基础版' });
-        return;
-      }
-    }
-
+    // AI 周卡无需先购买基础版，可直接购买
     const amount = productType === 'basic' ? 9.9 : 19.9;
     const orderId = genId();
     insertOrder({ id: orderId, productType, amount });
+    if (productType === 'ai_week') console.log('[order/create] AI 周卡订单已创建，无需基础版:', orderId);
     send(res, req, 200, { orderId, amount, productType });
     return;
   }

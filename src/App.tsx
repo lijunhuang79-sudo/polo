@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw, ChevronDown, ChevronRight, Copy } from 'lucide-react';
+import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw, Copy } from 'lucide-react';
 import { SCENARIOS } from './constants';
 import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic';
 import { validateAndNormalizeSolution, ensureProgramComplete, ensureBomMatchesIo } from './services/aiSolutionValidator';
@@ -13,10 +13,18 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   getStoredBasicLicense,
   getStoredAiValidUntil,
+  getStoredAiWeekUnlocksLocal,
   isFreeScenario,
   activateBasicLicense,
   validateAiToken,
+  createOrder,
+  getOrderStatus,
+  setStoredBasicLicense,
+  setStoredAiToken,
+  setStoredAiValidUntil,
+  setStoredAiWeekUnlocksLocal,
 } from './services/entitlement';
+import { QRCodeSVG } from 'qrcode.react';
 
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
@@ -42,6 +50,8 @@ if (typeof window !== 'undefined') (window as any).__PLC_USE_BACKEND_AI = USE_BA
 const SELECTABLE_AI_MODELS: AiModelId[] = ['deepseek', 'gemini'];
 /** 三档收费开关：VITE_APP_TIERED_PAYWALL=true 时启用免费/9.9/19.9 档位控制 */
 const ENABLE_TIERED_PAYWALL = String(_env.VITE_APP_TIERED_PAYWALL) === 'true';
+/** 调试用：在控制台输入 __PLC_TIERED_PAYWALL 可查看三档开关（true=显示购买/升级等入口） */
+if (typeof window !== 'undefined') (window as any).__PLC_TIERED_PAYWALL = ENABLE_TIERED_PAYWALL;
 
 const InitialState: PLCState = {
     inputs: {},
@@ -75,7 +85,6 @@ const App: React.FC = () => {
   const [testErrorDetail, setTestErrorDetail] = useState('');
   const [showAgreement, setShowAgreement] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
-  const [scenariosExpanded, setScenariosExpanded] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
 
   // 三档权益（仅当 ENABLE_TIERED_PAYWALL 时生效）
@@ -85,7 +94,21 @@ const App: React.FC = () => {
   const [licenseInput, setLicenseInput] = useState('');
   const [activateError, setActivateError] = useState('');
   const [activating, setActivating] = useState(false);
-  const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense;
+  // 购买弹窗与成功页
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [purchaseProductType, setPurchaseProductType] = useState<'basic' | 'ai_week' | null>(null);
+  const [pendingOrderId, setPendingOrderId] = useState('');
+  const [pendingOrderAmount, setPendingOrderAmount] = useState<number | null>(null);
+  const [pendingPayQrContent, setPendingPayQrContent] = useState<string | null>(null);
+  const [creatingOrder, setCreatingOrder] = useState(false);
+  const [orderError, setOrderError] = useState('');
+  const [orderErrorCode, setOrderErrorCode] = useState('');
+  const [checkingOrder, setCheckingOrder] = useState(false);
+  const [successResult, setSuccessResult] = useState<{ type: 'basic'; license_key: string } | { type: 'ai_week'; token: string; validUntil: string } | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [copyPurchaseSuccess, setCopyPurchaseSuccess] = useState(false);
+  // 基础版 或 曾购买过 AI 周卡：永久本地生成全部场景；AI 生成仅 7 天内有效
+  const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense || getStoredAiWeekUnlocksLocal();
   const hasAiValid = !ENABLE_TIERED_PAYWALL || (aiValidUntil != null && aiValidUntil > Date.now());
   /** 免费档下当前输入是否为「启保停控制」或「延时启动」的完整文案，如是则允许使用本地生成 */
   const isCurrentScenarioFree = ENABLE_TIERED_PAYWALL && SCENARIOS.some((s) => isFreeScenario(s.title) && s.text.trim() === scenarioText.trim());
@@ -138,6 +161,89 @@ const App: React.FC = () => {
     } else {
       setActivateError(result.message || '激活失败');
     }
+  };
+
+  const openPurchaseModal = (productType: 'basic' | 'ai_week') => {
+    setPurchaseProductType(productType);
+    setPendingOrderId('');
+    setOrderError('');
+    setOrderErrorCode('');
+    setShowPurchaseModal(true);
+  };
+
+  const handleCreateOrder = async () => {
+    if (!purchaseProductType) return;
+    setOrderError('');
+    setOrderErrorCode('');
+    setCreatingOrder(true);
+    // AI 周卡不传 basicLicenseKey，后端不要求先购基础版
+    const basicKey = purchaseProductType === 'ai_week' ? undefined : (basicLicense || getStoredBasicLicense() || undefined);
+    const result = await createOrder(purchaseProductType, basicKey);
+    setCreatingOrder(false);
+    if (result.ok && result.orderId) {
+      setPendingOrderId(result.orderId);
+      setPendingOrderAmount(result.amount ?? null);
+      setPendingPayQrContent(result.payQrContent ?? null);
+    } else {
+      setOrderError(result.error || result.code || '创建订单失败');
+      setOrderErrorCode(result.code || '');
+    }
+  };
+
+  const handleCheckOrderStatus = async () => {
+    if (!pendingOrderId.trim()) return;
+    setOrderError('');
+    setCheckingOrder(true);
+    const result = await getOrderStatus(pendingOrderId.trim());
+    setCheckingOrder(false);
+    if (!result.ok) {
+      setOrderError(result.error || '查询失败');
+      return;
+    }
+    if (result.pay_status === 'paid') {
+      if (result.license_key) {
+        setSuccessResult({ type: 'basic', license_key: result.license_key });
+        setStoredBasicLicense(result.license_key);
+        setBasicLicense(result.license_key);
+      } else if (result.token && result.validUntil) {
+        setSuccessResult({ type: 'ai_week', token: result.token, validUntil: result.validUntil });
+        setStoredAiToken(result.token);
+        setStoredAiValidUntil(new Date(result.validUntil).getTime());
+        setStoredAiWeekUnlocksLocal();
+        setAiValidUntil(new Date(result.validUntil).getTime());
+      }
+      setShowPurchaseModal(false);
+      setPendingOrderId('');
+      setPendingOrderAmount(null);
+      setPendingPayQrContent(null);
+      setPurchaseProductType(null);
+      setShowSuccessModal(true);
+    } else {
+      setOrderError('订单尚未支付，请完成支付后再查询');
+    }
+  };
+
+  const closePurchaseModal = () => {
+    setShowPurchaseModal(false);
+    setPurchaseProductType(null);
+    setPendingOrderId('');
+    setPendingOrderAmount(null);
+    setPendingPayQrContent(null);
+    setOrderError('');
+    setOrderErrorCode('');
+  };
+
+  const closeSuccessModal = () => {
+    setShowSuccessModal(false);
+    setSuccessResult(null);
+    setCopyPurchaseSuccess(false);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyPurchaseSuccess(true);
+      setTimeout(() => setCopyPurchaseSuccess(false), 2000);
+    });
   };
 
   const handleLogin = () => {
@@ -634,7 +740,6 @@ const App: React.FC = () => {
                   {activateError && <span className="text-sm text-red-600">{activateError}</span>}
                 </div>
               )}
-              {(hasBasic || !ENABLE_TIERED_PAYWALL) && (
               <div className="flex bg-slate-100 p-1 rounded-lg w-full md:w-auto">
                   <button 
                     onClick={() => setGenMode('local')}
@@ -645,12 +750,11 @@ const App: React.FC = () => {
                   <button 
                     onClick={() => hasAiValid && setGenMode('ai')}
                     className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : hasAiValid ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 cursor-default'}`}
-                    title={!hasAiValid ? '请先购买 19.9 元 AI 周卡（需已开通基础版）' : undefined}
+                    title={!hasAiValid ? '请先购买 19.9 元 AI 周卡' : undefined}
                   >
-                    <Bot size={16} /> {hasAiValid ? 'AI 智能生成' : 'AI 周卡 19.9 元'}
+                    <Bot size={16} /> AI 智能生成
                   </button>
               </div>
-              )}
           </div>
 
           <div className="space-y-4">
@@ -754,50 +858,70 @@ const App: React.FC = () => {
           )}
           
           <div className="mt-4 bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setScenariosExpanded((v) => !v)}
-              className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-bold text-slate-600 hover:bg-slate-100/80 transition-colors touch-manipulation min-h-[44px]"
-              aria-expanded={scenariosExpanded}
-            >
-              <span className="flex items-center gap-2">
-                {scenariosExpanded ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
-                <span className="uppercase tracking-wider text-slate-500">⚡ 典型场景示例</span>
-              </span>
-              <span className="text-xs text-slate-400 font-normal">{scenariosExpanded ? '点击收起' : '点击展开'}</span>
-            </button>
-            {scenariosExpanded && (
-              <div className="px-4 pb-4 pt-0 border-t border-slate-100">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-3">
-                  {SCENARIOS.map((item, idx) => {
-                    const freeOnly = ENABLE_TIERED_PAYWALL && !hasBasic && !isFreeScenario(item.title);
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => !freeOnly && setScenarioText(item.text)}
-                        disabled={freeOnly}
-                        className={`text-left text-sm px-3 py-2.5 rounded transition-all truncate touch-manipulation min-h-[44px] flex items-center gap-1.5 ${
-                          freeOnly
-                            ? 'text-slate-400 bg-slate-100 cursor-not-allowed border border-slate-200'
-                            : 'text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm'
-                        }`}
-                        title={freeOnly ? '升级基础版 9.9 元解锁' : item.text}
-                      >
-                        {freeOnly && <Lock size={14} className="shrink-0" />}
-                        • {item.title}
-                      </button>
-                    );
-                  })}
-                </div>
+            <div className="px-4 py-3 border-b border-slate-100">
+              <span className="uppercase tracking-wider text-slate-500 text-sm font-bold">⚡ 典型场景示例</span>
+            </div>
+            <div className="px-4 py-3">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2" style={{ maxHeight: '8.5rem', overflowY: 'auto' }}>
+                {SCENARIOS.map((item, idx) => {
+                  const freeOnly = ENABLE_TIERED_PAYWALL && !hasBasic && !isFreeScenario(item.title);
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => !freeOnly && setScenarioText(item.text)}
+                      disabled={freeOnly}
+                      className={`text-left text-xs sm:text-sm px-2 sm:px-3 py-2 rounded transition-all truncate touch-manipulation min-h-[40px] flex items-center gap-1 ${
+                        freeOnly
+                          ? 'text-slate-400 bg-slate-100 cursor-not-allowed border border-slate-200'
+                          : 'text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm'
+                      }`}
+                      title={freeOnly ? '升级基础版 9.9 元解锁' : item.text}
+                    >
+                      {freeOnly && <Lock size={12} className="shrink-0" />}
+                      <span className="truncate">• {item.title}</span>
+                    </button>
+                  );
+                })}
               </div>
-            )}
+            </div>
           </div>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3">
-             {ENABLE_TIERED_PAYWALL && !hasBasic && (
-               <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
-                 升级基础版 9.9 元可解锁「本地生成」与全部场景；购买 19.9 元 AI 周卡可解锁「AI 智能生成」。
-               </p>
+             {ENABLE_TIERED_PAYWALL && (
+               <div className="flex flex-wrap items-center gap-2">
+                 {!hasBasic && (
+                   <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+                     升级基础版 9.9 元可解锁「本地生成」与全部场景；购买 19.9 元 AI 周卡可获得永久「本地生成」全部场景 + 7 天「AI 智能生成」，无需先购基础版。
+                   </p>
+                 )}
+                 {!hasBasic && (
+                   <>
+                     <button
+                       type="button"
+                       onClick={() => openPurchaseModal('basic')}
+                       className="px-4 py-2 rounded-lg font-medium bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors"
+                     >
+                       购买基础版 9.9 元
+                     </button>
+                     <button
+                       type="button"
+                       onClick={() => openPurchaseModal('ai_week')}
+                       className="px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white shadow-sm transition-colors"
+                     >
+                       购买 AI 周卡 19.9 元
+                     </button>
+                   </>
+                 )}
+                 {hasBasic && !hasAiValid && (
+                   <button
+                     type="button"
+                     onClick={() => openPurchaseModal('ai_week')}
+                     className="px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white shadow-sm transition-colors"
+                   >
+                     购买 AI 周卡 19.9 元
+                   </button>
+                 )}
+               </div>
              )}
              <button 
                 onClick={handleGenerate}
@@ -1055,6 +1179,104 @@ const App: React.FC = () => {
             </ul>
             <p className="text-xs text-slate-500">完整协议由运营方另行公示，必要时请由法务审阅。</p>
             <button type="button" className="mt-4 w-full py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm font-medium" onClick={() => setShowAgreement(false)}>关闭</button>
+          </div>
+        </div>
+      )}
+      {showPurchaseModal && purchaseProductType && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={closePurchaseModal}>
+          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-800 mb-3">
+              {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 周卡 19.9 元'}
+            </h3>
+            {!pendingOrderId ? (
+              <>
+                <p className="text-sm text-slate-600 mb-4">
+                  {purchaseProductType === 'basic'
+                    ? '支付后将获得基础版授权码，可解锁「本地生成」与全部场景。'
+                    : '支付后将获得 AI 周卡链接：永久「本地生成」全部场景 + 7 天「AI 智能生成」，无需先购基础版。'}
+                </p>
+                {orderError && (
+                  <div className="mb-3 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                    {orderError}
+                    {orderErrorCode === 'BASIC_REQUIRED' && purchaseProductType === 'ai_week' && (
+                      <span className="block mt-2 text-xs text-amber-700">当前已支持直接购买 AI 周卡，无需先购基础版。若仍提示此错误，请重启后端（backend 目录下 npm run dev）后再试。</span>
+                    )}
+                    <span className="block mt-2 text-xs text-slate-600 font-medium">排查：请确认 ① 前端用 npm run dev 打开的是 http://localhost:5173 或 http://127.0.0.1:5173；② 点击「去支付」后，运行后端的终端里是否出现一行 <code className="bg-slate-200 px-1 rounded">[order/create] 收到请求</code>。若没有，说明请求未打到当前后端。</span>
+                    <span className="block mt-1 text-xs text-red-600">请确认后端已启动（backend 目录下 npm run dev，默认端口 3001），且 .env 中 VITE_APP_API_BASE=http://localhost:3001</span>
+                  </div>
+                )}
+                <p className="text-xs text-slate-500 mb-3">点击「去支付」后将向服务器申请订单号，成功后会在此显示订单号及「查看订单状态」按钮。</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={handleCreateOrder} disabled={creatingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-blue-600 text-white disabled:opacity-50">
+                    {creatingOrder ? '创建中...' : '去支付（占位）'}
+                  </button>
+                  <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">取消</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-3 p-3 rounded-lg bg-slate-100 border border-slate-200">
+                  <p className="text-xs text-slate-500 mb-1">订单号（请妥善保存）</p>
+                  <p className="text-base font-mono font-bold text-slate-800 break-all">{pendingOrderId}</p>
+                </div>
+                {/* 支付宝支付二维码区域（与提供的截图一致） */}
+                <div className="mb-4 rounded-xl overflow-hidden bg-[#1677ff]">
+                  <p className="text-center text-white font-medium py-2 text-sm">推荐使用支付宝</p>
+                  <div className="bg-white mx-3 mb-3 rounded-lg p-4 flex flex-col items-center">
+                    <div className="bg-white p-2 rounded-lg inline-block">
+                      <QRCodeSVG
+                        value={pendingPayQrContent || `orderId=${pendingOrderId}&amount=${pendingOrderAmount ?? (purchaseProductType === 'basic' ? 9.9 : 19.9)}`}
+                        size={180}
+                        level="M"
+                        includeMargin={false}
+                      />
+                    </div>
+                    <p className="text-slate-800 font-medium mt-2 text-sm">Polo(军)</p>
+                  </div>
+                  <p className="text-center text-white text-sm pb-3">打开支付宝 [扫一扫]</p>
+                </div>
+                <p className="text-sm text-amber-700 mb-4">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
+                {orderError && <p className="text-sm text-red-600 mb-2">{orderError}</p>}
+                <div className="flex gap-2">
+                  <button type="button" onClick={handleCheckOrderStatus} disabled={checkingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-green-600 text-white disabled:opacity-50">
+                    {checkingOrder ? '查询中...' : '查看订单状态'}
+                  </button>
+                  <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {showSuccessModal && successResult && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={closeSuccessModal}>
+          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-green-700 mb-3">购买成功</h3>
+            {successResult.type === 'basic' ? (
+              <>
+                <p className="text-sm text-slate-600 mb-2">请妥善保存您的基础版授权码：</p>
+                <div className="flex items-center gap-2 mb-4">
+                  <code className="flex-1 bg-slate-100 px-3 py-2 rounded-lg text-sm break-all">{successResult.license_key}</code>
+                  <button type="button" onClick={() => copyToClipboard(successResult.license_key)} className="shrink-0 px-3 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-sm font-medium">
+                    {copyPurchaseSuccess ? '已复制' : '复制'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mb-4">已自动写入本地，您可直接使用「本地生成」与全部场景。</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-600 mb-2">请保存您的 AI 周卡链接：</p>
+                <p className="text-xs text-slate-500 mb-1">您已永久拥有「本地生成」全部场景；此链接 7 天内有效，打开即可使用「AI 智能生成」。</p>
+                <div className="flex items-center gap-2 mb-2">
+                  <code className="flex-1 bg-slate-100 px-3 py-2 rounded-lg text-xs break-all">{typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?t=${successResult.token}` : `?t=${successResult.token}`}</code>
+                  <button type="button" onClick={() => copyToClipboard(typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?t=${successResult.token}` : `?t=${successResult.token}`)} className="shrink-0 px-3 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-sm font-medium">
+                    {copyPurchaseSuccess ? '已复制' : '复制'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mb-4">有效期至：{new Date(successResult.validUntil).toLocaleString()}，已自动写入本地。</p>
+              </>
+            )}
+            <button type="button" onClick={closeSuccessModal} className="w-full py-2.5 rounded-lg font-medium bg-slate-200 hover:bg-slate-300 text-slate-700">关闭</button>
           </div>
         </div>
       )}

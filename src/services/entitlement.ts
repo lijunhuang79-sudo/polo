@@ -6,6 +6,8 @@
 const STORAGE_BASIC = 'plc_tier_basic_license';
 const STORAGE_AI_TOKEN = 'plc_tier_ai_token';
 const STORAGE_AI_VALID_UNTIL = 'plc_tier_ai_valid_until';
+/** AI 周卡购买后永久解锁本地生成全部场景 */
+const STORAGE_AI_WEEK_UNLOCKS_LOCAL = 'plc_tier_ai_week_unlocks_local';
 
 /** 免费档可用的典型场景：按 SCENARIOS 的 title 匹配（启保停控制、延时启动） */
 export const FREE_SCENARIO_TITLES = ['基础: 启保停控制', '基础: 延时启动'];
@@ -45,6 +47,16 @@ export function setStoredAiValidUntil(validUntilMs: number): void {
 export function setStoredAiToken(token: string): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(STORAGE_AI_TOKEN, token);
+}
+
+export function getStoredAiWeekUnlocksLocal(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(STORAGE_AI_WEEK_UNLOCKS_LOCAL) === 'true';
+}
+
+export function setStoredAiWeekUnlocksLocal(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_AI_WEEK_UNLOCKS_LOCAL, 'true');
 }
 
 export function clearStoredAi(): void {
@@ -119,5 +131,83 @@ export async function validateAiToken(token: string): Promise<{ valid: boolean; 
     setStoredAiToken(t);
     setStoredAiValidUntil(until);
     return { valid: true, validUntil: until };
+  }
+}
+
+function getApiBase(): string {
+  const env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
+  // 开发模式下用空 base，走 Vite 代理 /api -> localhost:3000，避免跨域
+  const isDev = env?.DEV === true;
+  if (isDev) return '';
+  const base = env?.VITE_APP_API_BASE || env?.VITE_API_BASE_URL;
+  return base ? String(base).replace(/\/$/, '') : '';
+}
+
+/**
+ * 创建订单（基础版 9.9 / AI 周卡 19.9）。AI 周卡无需先购基础版，可不传 basicLicenseKey。
+ */
+export async function createOrder(
+  productType: 'basic' | 'ai_week',
+  basicLicenseKey?: string
+): Promise<{ ok: boolean; orderId?: string; amount?: number; productType?: string; payQrContent?: string; error?: string; code?: string }> {
+  try {
+    const base = getApiBase();
+    let url = base ? `${base}/api/order/create` : '/api/order/create';
+    url += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+    if (typeof window !== 'undefined' && (import.meta as any).env?.DEV) {
+      console.log('[createOrder] 请求 URL:', url, 'productType:', productType);
+    }
+    const body: { productType: string; basicLicenseKey?: string } = { productType };
+    if (productType === 'ai_week' && basicLicenseKey) body.basicLicenseKey = basicLicenseKey;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.orderId) {
+      return { ok: true, orderId: data.orderId, amount: data.amount, productType: data.productType, payQrContent: data.payQrContent };
+    }
+    return {
+      ok: false,
+      error: data.message || data.error || '创建订单失败',
+      code: data.code,
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '网络异常' };
+  }
+}
+
+/**
+ * 查询订单状态；已支付时返回 license_key 或 token、validUntil。
+ */
+export async function getOrderStatus(
+  orderId: string
+): Promise<{
+  ok: boolean;
+  pay_status?: string;
+  license_key?: string;
+  token?: string;
+  validUntil?: string;
+  error?: string;
+}> {
+  try {
+    const base = getApiBase();
+    const url = base ? `${base}/api/order/status` : '/api/order/status';
+    const res = await fetch(`${url}?orderId=${encodeURIComponent(orderId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.orderId) {
+      return {
+        ok: true,
+        pay_status: data.pay_status,
+        license_key: data.license_key,
+        token: data.token,
+        validUntil: data.validUntil,
+      };
+    }
+    return { ok: false, error: data.error || '查询失败' };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '网络异常' };
   }
 }
