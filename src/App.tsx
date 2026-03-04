@@ -24,8 +24,6 @@ import {
   setStoredAiValidUntil,
   setStoredAiWeekUnlocksLocal,
 } from './services/entitlement';
-import { QRCodeSVG } from 'qrcode.react';
-
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
 const APP_DISPLAY_NAME = _env.VITE_APP_NAME ?? 'PLC 编程仿真器';
@@ -50,6 +48,12 @@ const SELECTABLE_AI_MODELS: AiModelId[] = ['deepseek', 'gemini'];
 const ENABLE_TIERED_PAYWALL = String(_env.VITE_APP_TIERED_PAYWALL) === 'true';
 /** 调试用：在控制台输入 __PLC_TIERED_PAYWALL 可查看三档开关（true=显示购买/升级等入口） */
 if (typeof window !== 'undefined') (window as any).__PLC_TIERED_PAYWALL = ENABLE_TIERED_PAYWALL;
+/** 可选：固定支付宝收款链接，配置后二维码内容为该链接，扫码可打开支付宝付款（金额需用户按订单选择 9.9/19.9） */
+const ALIPAY_QR_URL = (_env.VITE_APP_ALIPAY_QR_URL && String(_env.VITE_APP_ALIPAY_QR_URL).trim()) || '';
+/** 默认收款/跳转链接：购买页二维码使用此链接，扫码可打开对应页面 */
+const DEFAULT_QR_LINK = 'http://xhslink.com/o/Jn4l2Jo6PI';
+/** 可选：支付宝收款码/支付图图片地址。不配置时使用项目内置图 public/alipay-payment.png（与你提供的图一致） */
+const ALIPAY_QR_IMAGE = (_env.VITE_APP_ALIPAY_QR_IMAGE && String(_env.VITE_APP_ALIPAY_QR_IMAGE).trim()) || '/alipay-payment.png';
 
 const InitialState: PLCState = {
     inputs: {},
@@ -1217,22 +1221,11 @@ const App: React.FC = () => {
                   <p className="text-xs text-slate-500 mb-1">订单号（请妥善保存）</p>
                   <p className="text-base font-mono font-bold text-slate-800 break-all">{pendingOrderId}</p>
                 </div>
-                {/* 支付宝支付二维码区域（与提供的截图一致） */}
-                <div className="mb-4 rounded-xl overflow-hidden bg-[#1677ff]">
-                  <p className="text-center text-white font-medium py-2 text-sm">推荐使用支付宝</p>
-                  <div className="bg-white mx-3 mb-3 rounded-lg p-4 flex flex-col items-center">
-                    <div className="bg-white p-2 rounded-lg inline-block">
-                      <QRCodeSVG
-                        value={pendingPayQrContent || `orderId=${pendingOrderId}&amount=${pendingOrderAmount ?? (purchaseProductType === 'basic' ? 9.9 : 19.9)}`}
-                        size={180}
-                        level="M"
-                        includeMargin={false}
-                      />
-                    </div>
-                    <p className="text-slate-800 font-medium mt-2 text-sm">Polo(军)</p>
-                  </div>
-                  <p className="text-center text-white text-sm pb-3">打开支付宝 [扫一扫]</p>
+                {/* 支付宝支付：直接展示收款图（内置为与你提供的图一致，可配置 VITE_APP_ALIPAY_QR_IMAGE 替换） */}
+                <div className="mb-4 flex justify-center">
+                  <img src={ALIPAY_QR_IMAGE} alt="推荐使用支付宝，打开支付宝扫一扫" className="max-w-full w-full max-w-sm rounded-xl shadow-lg" />
                 </div>
+                <p className="text-xs text-slate-600 text-center mb-2">请使用支付宝扫一扫上方收款码，按订单金额（{purchaseProductType === 'basic' ? '9.9' : '19.9'} 元）付款</p>
                 <p className="text-sm text-amber-700 mb-4">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
                 {orderError && <p className="text-sm text-red-600 mb-2">{orderError}</p>}
                 <div className="flex gap-2">
