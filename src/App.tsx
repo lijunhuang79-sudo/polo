@@ -1213,13 +1213,13 @@ const App: React.FC = () => {
         </div>
       )}
       {showPurchaseModal && purchaseProductType && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={closePurchaseModal}>
-          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left relative" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h3 className="text-lg font-bold text-slate-800">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-3 sm:p-4" style={{ minHeight: '100dvh' }} onClick={closePurchaseModal}>
+          <div className="bg-white rounded-xl max-w-sm w-full max-h-[90vh] overflow-y-auto shadow-xl p-4 text-left relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-base font-bold text-slate-800">
                 {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 周卡 19.9 元'}
               </h3>
-              <button type="button" onClick={closePurchaseModal} className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-xl leading-none" aria-label="关闭">×</button>
+              <button type="button" onClick={closePurchaseModal} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none" aria-label="关闭">×</button>
             </div>
             {!pendingOrderId ? (
               <>
@@ -1248,31 +1248,25 @@ const App: React.FC = () => {
               </>
             ) : (
               <>
-                <div className="mb-3 p-3 rounded-lg bg-slate-100 border border-slate-200">
-                  <p className="text-xs text-slate-500 mb-1">订单号（请妥善保存）</p>
-                  <p className="text-base font-mono font-bold text-slate-800 break-all">{pendingOrderId}</p>
+                <div className="mb-2 py-1.5 px-2 rounded bg-slate-100 border border-slate-200 flex items-baseline gap-2">
+                  <span className="text-xs text-slate-500 shrink-0">订单号</span>
+                  <span className="text-sm font-mono font-bold text-slate-800 break-all">{pendingOrderId}</span>
                 </div>
-                {/* 支付宝支付：直接展示收款图（内置为与你提供的图一致，可配置 VITE_APP_ALIPAY_QR_IMAGE 替换） */}
-                <div className="mb-4 flex justify-center">
-                  <img src={ALIPAY_QR_IMAGE} alt="推荐使用支付宝，打开支付宝扫一扫" className="max-w-full w-full max-w-sm rounded-xl shadow-lg" />
+                <div className="mb-2 flex justify-center">
+                  <img src={ALIPAY_QR_IMAGE} alt="支付宝收款码" className="max-w-[200px] w-full rounded-lg shadow" />
                 </div>
-                <p className="text-xs text-slate-600 text-center mb-2">请使用支付宝扫一扫上方收款码，按订单金额（{purchaseProductType === 'basic' ? '9.9' : '19.9'} 元）付款</p>
-                <p className="text-sm text-amber-700 mb-2">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
-                {IS_LOCALHOST ? (
-                  <p className="text-sm text-blue-700 mb-4 font-medium">若您已用支付宝完成付款：当前未接入支付回调，请点击下方「模拟到账」补发授权码，将自动弹出激活码。</p>
-                ) : (
-                  <p className="text-sm text-slate-600 mb-4">完成付款后由管理员在本地确认到账，您再点击「查看订单状态」即可获取激活码。</p>
-                )}
-                {orderError && <p className="text-sm text-red-600 mb-2">{orderError}</p>}
-                <div className="flex flex-col gap-2">
+                <p className="text-xs text-slate-600 text-center mb-1.5">扫码付 {purchaseProductType === 'basic' ? '9.9' : '19.9'} 元，付完点「查看订单状态」取激活码。</p>
+                {!IS_LOCALHOST && <p className="text-xs text-slate-500 text-center mb-2">到账由管理员确认后即可查询。</p>}
+                {orderError && <p className="text-xs text-red-600 mb-2">{orderError}</p>}
+                <div className="flex flex-col gap-1.5">
                   <div className="flex gap-2">
-                    <button type="button" onClick={handleCheckOrderStatus} disabled={checkingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-green-600 text-white disabled:opacity-50">
+                    <button type="button" onClick={handleCheckOrderStatus} disabled={checkingOrder} className="flex-1 py-2 rounded-lg text-sm font-medium bg-green-600 text-white disabled:opacity-50">
                       {checkingOrder ? '查询中...' : '查看订单状态'}
                     </button>
-                    <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
+                    <button type="button" onClick={closePurchaseModal} className="px-3 py-2 rounded-lg text-sm border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
                   </div>
                   {IS_LOCALHOST && (
-                    <button type="button" onClick={handleSimulateCallback} disabled={simulatingCallback} className="py-2 rounded-lg text-sm border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50">
+                    <button type="button" onClick={handleSimulateCallback} disabled={simulatingCallback} className="py-1.5 rounded-lg text-xs border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50">
                       {simulatingCallback ? '处理中...' : '已线下付款，模拟到账（联调）'}
                     </button>
                   )}
