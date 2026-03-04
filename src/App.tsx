@@ -87,6 +87,10 @@ const App: React.FC = () => {
   const [activating, setActivating] = useState(false);
   const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense;
   const hasAiValid = !ENABLE_TIERED_PAYWALL || (aiValidUntil != null && aiValidUntil > Date.now());
+  /** 免费档下当前输入是否为「启保停控制」或「延时启动」的完整文案，如是则允许使用本地生成 */
+  const isCurrentScenarioFree = ENABLE_TIERED_PAYWALL && SCENARIOS.some((s) => isFreeScenario(s.title) && s.text.trim() === scenarioText.trim());
+  /** 免费档是否允许点击一键生成：仅当本地模式且当前为 2 个免费场景之一时允许 */
+  const freeTierCanGenerate = !hasBasic && genMode === 'local' && isCurrentScenarioFree;
 
   // Simulation Loop Refs
   const stateRef = useRef<PLCState>(InitialState);
@@ -797,16 +801,16 @@ const App: React.FC = () => {
              )}
              <button 
                 onClick={handleGenerate}
-                disabled={isGenerating || (ENABLE_TIERED_PAYWALL && !hasBasic) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)}
+                disabled={isGenerating || (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && hasBasic && genMode === 'ai' && !hasAiValid)}
                 className={`text-white px-6 sm:px-8 py-3 sm:py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 touch-manipulation min-h-[48px] ${
-                  (ENABLE_TIERED_PAYWALL && !hasBasic) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)
+                  (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)
                     ? 'bg-slate-400 cursor-not-allowed'
                     : isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')
                 }`}
-                title={ENABLE_TIERED_PAYWALL && !hasBasic ? '请先升级基础版' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '请先购买 AI 周卡' : undefined}
+                title={ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '请先升级基础版或选择免费场景（启保停/延时启动）' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '请先购买 AI 周卡' : undefined}
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
-               {ENABLE_TIERED_PAYWALL && !hasBasic ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
+               {ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
              </button>
              <button 
                 onClick={() => {
