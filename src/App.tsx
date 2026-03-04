@@ -10,6 +10,13 @@ import { PLCState, GeneratedSolution, LogicConfig } from './types';
 import SimulationPanel from './components/SimulationPanel';
 import HmiPanel from './components/HmiPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import {
+  getStoredBasicLicense,
+  getStoredAiValidUntil,
+  isFreeScenario,
+  activateBasicLicense,
+  validateAiToken,
+} from './services/entitlement';
 
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
@@ -31,8 +38,10 @@ const USE_BACKEND_AI = (typeof import.meta !== 'undefined' && (import.meta as an
   : String(_env.VITE_APP_USE_BACKEND_AI) !== 'false';
 /** 调试用：在浏览器控制台输入 __PLC_USE_BACKEND_AI 可查看当前构建的实际值（true=不显示 Key 输入框，false=显示） */
 if (typeof window !== 'undefined') (window as any).__PLC_USE_BACKEND_AI = USE_BACKEND_AI;
-/** 后端支持的模型（qwen 暂未接入后端） */
-const BACKEND_MODELS: AiModelId[] = ['deepseek', 'gemini', 'codex'];
+/** 当前可选 AI 模型（GPT5.2 Pro 暂关闭，仅显示 DeepSeek 与 Gemini） */
+const SELECTABLE_AI_MODELS: AiModelId[] = ['deepseek', 'gemini'];
+/** 三档收费开关：VITE_APP_TIERED_PAYWALL=true 时启用免费/9.9/19.9 档位控制 */
+const ENABLE_TIERED_PAYWALL = String(_env.VITE_APP_TIERED_PAYWALL) === 'true';
 
 const InitialState: PLCState = {
     inputs: {},
@@ -69,6 +78,16 @@ const App: React.FC = () => {
   const [scenariosExpanded, setScenariosExpanded] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
 
+  // 三档权益（仅当 ENABLE_TIERED_PAYWALL 时生效）
+  const [basicLicense, setBasicLicense] = useState<string | null>(() => (ENABLE_TIERED_PAYWALL ? getStoredBasicLicense() : null));
+  const [aiValidUntil, setAiValidUntil] = useState<number | null>(() => (ENABLE_TIERED_PAYWALL ? getStoredAiValidUntil() : null));
+  const [showActivateBasic, setShowActivateBasic] = useState(false);
+  const [licenseInput, setLicenseInput] = useState('');
+  const [activateError, setActivateError] = useState('');
+  const [activating, setActivating] = useState(false);
+  const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense;
+  const hasAiValid = !ENABLE_TIERED_PAYWALL || (aiValidUntil != null && aiValidUntil > Date.now());
+
   // Simulation Loop Refs
   const stateRef = useRef<PLCState>(InitialState);
   const logicRef = useRef<LogicConfig | null>(null);
@@ -80,7 +99,7 @@ const App: React.FC = () => {
 
   // 后端模式下 qwen 未支持，自动切换到 deepseek
   useEffect(() => {
-    if (USE_BACKEND_AI && !BACKEND_MODELS.includes(aiModel)) setAiModel('deepseek');
+    if (USE_BACKEND_AI && !SELECTABLE_AI_MODELS.includes(aiModel)) setAiModel('deepseek');
   }, [USE_BACKEND_AI, aiModel]);
 
   useEffect(() => {
@@ -91,6 +110,31 @@ const App: React.FC = () => {
         setApiKey("");
     }
   }, [aiModel]);
+
+  // 三档：URL 带 ?t= 时校验 AI token 并写入本地
+  useEffect(() => {
+    if (!ENABLE_TIERED_PAYWALL || typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('t');
+    if (!t) return;
+    validateAiToken(t).then((r) => {
+      if (r.valid && r.validUntil) setAiValidUntil(r.validUntil);
+    });
+  }, [ENABLE_TIERED_PAYWALL]);
+
+  const handleActivateBasic = async () => {
+    setActivateError('');
+    setActivating(true);
+    const result = await activateBasicLicense(licenseInput);
+    setActivating(false);
+    if (result.ok) {
+      setBasicLicense(licenseInput.trim());
+      setShowActivateBasic(false);
+      setLicenseInput('');
+    } else {
+      setActivateError(result.message || '激活失败');
+    }
+  };
 
   const handleLogin = () => {
     if (ALLOW_DEV_BACKDOOR && password === DEV_DEBUG_PASSWORD) {
@@ -299,9 +343,9 @@ const App: React.FC = () => {
             const aiPrompt = `${scenarioText}\n\n[logic_hints]\n${JSON.stringify(logicHint, null, 2)}`;
             let rawSol: GeneratedSolution;
             try {
-                if (USE_BACKEND_AI && BACKEND_MODELS.includes(aiModel)) {
+                if (USE_BACKEND_AI && SELECTABLE_AI_MODELS.includes(aiModel)) {
                     rawSol = await backendGenerate({
-                        model: aiModel as 'deepseek' | 'gemini' | 'codex',
+                        model: aiModel as 'deepseek' | 'gemini',
                         prompt: aiPrompt,
                         logicHints: logicHint,
                     });
@@ -563,6 +607,30 @@ const App: React.FC = () => {
                 <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">01</span> 
                 场景需求描述
               </h2>
+              {ENABLE_TIERED_PAYWALL && !hasBasic && (
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                  <span className="text-sm text-slate-600">免费档仅可体验 2 个场景</span>
+                  <button type="button" onClick={() => setShowActivateBasic((v) => !v)} className="text-sm font-medium text-blue-600 hover:underline">
+                    已有授权码？激活
+                  </button>
+                </div>
+              )}
+              {ENABLE_TIERED_PAYWALL && showActivateBasic && (
+                <div className="w-full rounded-lg bg-slate-50 border border-slate-200 p-3 flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    placeholder="请输入基础版授权码"
+                    value={licenseInput}
+                    onChange={(e) => { setLicenseInput(e.target.value); setActivateError(''); }}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  />
+                  <button type="button" onClick={handleActivateBasic} disabled={activating} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium disabled:opacity-50">
+                    {activating ? '验证中...' : '激活'}
+                  </button>
+                  {activateError && <span className="text-sm text-red-600">{activateError}</span>}
+                </div>
+              )}
+              {(hasBasic || !ENABLE_TIERED_PAYWALL) && (
               <div className="flex bg-slate-100 p-1 rounded-lg w-full md:w-auto">
                   <button 
                     onClick={() => setGenMode('local')}
@@ -571,16 +639,18 @@ const App: React.FC = () => {
                     <HardDrive size={16} /> 本地生成
                   </button>
                   <button 
-                    onClick={() => setGenMode('ai')}
-                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : 'text-slate-500 hover:text-slate-700'}`}
+                    onClick={() => hasAiValid && setGenMode('ai')}
+                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : hasAiValid ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 cursor-default'}`}
+                    title={!hasAiValid ? '请先购买 19.9 元 AI 周卡（需已开通基础版）' : undefined}
                   >
-                    <Bot size={16} /> AI 智能生成
+                    <Bot size={16} /> {hasAiValid ? 'AI 智能生成' : 'AI 周卡 19.9 元'}
                   </button>
               </div>
+              )}
           </div>
 
           <div className="space-y-4">
-             {genMode === 'ai' && (
+             {genMode === 'ai' && (hasAiValid || !ENABLE_TIERED_PAYWALL) && (
                  <div className="bg-indigo-50 p-3 sm:p-4 rounded-lg border border-indigo-100 mb-4 animate-in fade-in slide-in-from-top-2">
                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                          <div className="flex items-center gap-2">
@@ -595,8 +665,8 @@ const App: React.FC = () => {
                              }}
                              className="bg-white border border-indigo-200 text-indigo-700 text-xs rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-indigo-500 font-bold w-full sm:w-auto min-h-[44px] sm:min-h-0"
                          >
-                             {(USE_BACKEND_AI ? BACKEND_MODELS : (Object.keys(AI_MODEL_CONFIGS) as AiModelId[])).map((id) => (
-                                 <option key={id} value={id}>{AI_MODEL_CONFIGS[id].name}{id === 'codex' ? ' (OpenAI)' : ''}</option>
+                             {SELECTABLE_AI_MODELS.map((id) => (
+                                 <option key={id} value={id}>{AI_MODEL_CONFIGS[id].name}</option>
                              ))}
                          </select>
                      </div>
@@ -695,29 +765,48 @@ const App: React.FC = () => {
             {scenariosExpanded && (
               <div className="px-4 pb-4 pt-0 border-t border-slate-100">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-3">
-                  {SCENARIOS.map((item, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setScenarioText(item.text)}
-                      className="text-left text-sm text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm px-3 py-2.5 rounded transition-all truncate touch-manipulation min-h-[44px]"
-                      title={item.text}
-                    >
-                      • {item.title}
-                    </button>
-                  ))}
+                  {SCENARIOS.map((item, idx) => {
+                    const freeOnly = ENABLE_TIERED_PAYWALL && !hasBasic && !isFreeScenario(item.title);
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => !freeOnly && setScenarioText(item.text)}
+                        disabled={freeOnly}
+                        className={`text-left text-sm px-3 py-2.5 rounded transition-all truncate touch-manipulation min-h-[44px] flex items-center gap-1.5 ${
+                          freeOnly
+                            ? 'text-slate-400 bg-slate-100 cursor-not-allowed border border-slate-200'
+                            : 'text-slate-600 hover:text-blue-600 hover:bg-white border border-transparent hover:border-blue-200 hover:shadow-sm'
+                        }`}
+                        title={freeOnly ? '升级基础版 9.9 元解锁' : item.text}
+                      >
+                        {freeOnly && <Lock size={14} className="shrink-0" />}
+                        • {item.title}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3">
+             {ENABLE_TIERED_PAYWALL && !hasBasic && (
+               <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+                 升级基础版 9.9 元可解锁「本地生成」与全部场景；购买 19.9 元 AI 周卡可解锁「AI 智能生成」。
+               </p>
+             )}
              <button 
                 onClick={handleGenerate}
-                disabled={isGenerating}
-                className={`text-white px-6 sm:px-8 py-3 sm:py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 touch-manipulation min-h-[48px] ${isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')}`}
+                disabled={isGenerating || (ENABLE_TIERED_PAYWALL && !hasBasic) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)}
+                className={`text-white px-6 sm:px-8 py-3 sm:py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 touch-manipulation min-h-[48px] ${
+                  (ENABLE_TIERED_PAYWALL && !hasBasic) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)
+                    ? 'bg-slate-400 cursor-not-allowed'
+                    : isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')
+                }`}
+                title={ENABLE_TIERED_PAYWALL && !hasBasic ? '请先升级基础版' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '请先购买 AI 周卡' : undefined}
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
-               {isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
+               {ENABLE_TIERED_PAYWALL && !hasBasic ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
              </button>
              <button 
                 onClick={() => {

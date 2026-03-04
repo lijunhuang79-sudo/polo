@@ -2,8 +2,10 @@
  * PLC-Sim API 服务
  * 运行在 3000 端口，供 api.plc-sim.com 反向代理
  * API Key 仅从环境变量读取，永不返回给前端
+ * 三档收费：订单、基础版授权、AI 周卡 token（当前为内存存储，可后续改为 DB）
  */
 import http from 'http';
+import crypto from 'crypto';
 import { parse as parseUrl } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
@@ -245,6 +247,31 @@ function cors(res, req) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
+// ---------- 三档收费：内存存储（可后续改为 DB） ----------
+const orders = [];
+const basicLicenses = [];
+const aiWeekTokens = [];
+
+function genId() {
+  return crypto.randomBytes(8).toString('hex');
+}
+function genLicenseKey() {
+  return 'PLC-' + crypto.randomBytes(10).toString('hex').toUpperCase();
+}
+function genAiToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function findBasicLicenseByKey(licenseKey) {
+  const key = (licenseKey || '').trim();
+  return basicLicenses.find((l) => l.license_key === key);
+}
+
+function findAiTokenByToken(token) {
+  const t = (token || '').trim();
+  return aiWeekTokens.find((a) => a.token === t);
+}
+
 const server = http.createServer(async (req, res) => {
   const { pathname } = parseUrl(req.url || '', true);
 
@@ -299,6 +326,174 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       send(res, req, 502, { error: err.message || 'AI request failed' });
     }
+    return;
+  }
+
+  // ---------- 三档收费：授权与 token 校验 ----------
+  if (pathname === '/api/license/activate' && req.method === 'POST') {
+    const body = await readBody(req);
+    const payload = parseJsonBody(body);
+    const licenseKey = (payload?.licenseKey || payload?.license_key || '').trim();
+    if (!licenseKey) {
+      send(res, req, 400, { success: false, valid: false, message: '请输入授权码' });
+      return;
+    }
+    const license = findBasicLicenseByKey(licenseKey);
+    if (!license) {
+      send(res, req, 200, { success: false, valid: false, message: '授权码无效' });
+      return;
+    }
+    send(res, req, 200, { success: true, valid: true });
+    return;
+  }
+
+  if (pathname === '/api/license/validate' && req.method === 'GET') {
+    const { query } = parseUrl(req.url || '', true);
+    const licenseKey = (query?.licenseKey || query?.license_key || req.headers?.['x-license-key'] || '').trim();
+    if (!licenseKey) {
+      send(res, req, 200, { valid: false });
+      return;
+    }
+    const license = findBasicLicenseByKey(licenseKey);
+    send(res, req, 200, { valid: !!license });
+    return;
+  }
+
+  if (pathname === '/api/ai-token/validate' && req.method === 'GET') {
+    const { query } = parseUrl(req.url || '', true);
+    const t = (query?.t || '').trim();
+    if (!t) {
+      send(res, req, 400, { valid: false, message: '缺少 token' });
+      return;
+    }
+    const row = findAiTokenByToken(t);
+    const now = Date.now();
+    if (!row || row.valid_until < now) {
+      send(res, req, 200, { valid: false, message: '链接已失效' });
+      return;
+    }
+    send(res, req, 200, { valid: true, validUntil: new Date(row.valid_until).toISOString() });
+    return;
+  }
+
+  // ---------- 三档收费：订单创建与状态 ----------
+  if (pathname === '/api/order/create' && req.method === 'POST') {
+    const body = await readBody(req);
+    const payload = parseJsonBody(body);
+    const productType = payload?.productType || payload?.product_type;
+    const basicLicenseKey = (payload?.basicLicenseKey || payload?.basic_license_key || '').trim();
+
+    if (productType !== 'basic' && productType !== 'ai_week') {
+      send(res, req, 400, { code: 'INVALID_PRODUCT', message: 'productType 须为 basic 或 ai_week' });
+      return;
+    }
+
+    if (productType === 'ai_week') {
+      if (!basicLicenseKey) {
+        send(res, req, 400, { code: 'BASIC_REQUIRED', message: '请先购买并激活基础版' });
+        return;
+      }
+      const license = findBasicLicenseByKey(basicLicenseKey);
+      if (!license) {
+        send(res, req, 400, { code: 'BASIC_REQUIRED', message: '请先购买并激活基础版' });
+        return;
+      }
+    }
+
+    const amount = productType === 'basic' ? 9.9 : 19.9;
+    const orderId = genId();
+    orders.push({
+      id: orderId,
+      product_type: productType,
+      amount,
+      pay_status: 'pending',
+      pay_channel: null,
+      pay_time: null,
+      created_at: Date.now(),
+    });
+    send(res, req, 200, { orderId, amount, productType });
+    return;
+  }
+
+  if (pathname === '/api/order/status' && req.method === 'GET') {
+    const { query } = parseUrl(req.url || '', true);
+    const orderId = (query?.orderId || query?.order_id || '').trim();
+    if (!orderId) {
+      send(res, req, 400, { error: '缺少 orderId' });
+      return;
+    }
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) {
+      send(res, req, 404, { error: '订单不存在' });
+      return;
+    }
+    const out = { orderId: order.id, pay_status: order.pay_status, amount: order.amount, productType: order.product_type };
+    if (order.pay_status === 'paid') {
+      if (order.product_type === 'basic') {
+        const lic = basicLicenses.find((l) => l.order_id === order.id);
+        if (lic) out.license_key = lic.license_key;
+      } else {
+        const tok = aiWeekTokens.find((a) => a.order_id === order.id);
+        if (tok) {
+          out.token = tok.token;
+          out.validUntil = new Date(tok.valid_until).toISOString();
+        }
+      }
+    }
+    send(res, req, 200, out);
+    return;
+  }
+
+  /** 联调用：模拟支付回调，将订单置为已支付并发放 license/token（仅开发或显式开启时可用） */
+  if (pathname === '/api/order/simulate-callback' && req.method === 'POST') {
+    const body = await readBody(req);
+    const payload = parseJsonBody(body);
+    const orderId = (payload?.orderId || payload?.order_id || '').trim();
+    if (!orderId) {
+      send(res, req, 400, { error: '缺少 orderId' });
+      return;
+    }
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) {
+      send(res, req, 404, { error: '订单不存在' });
+      return;
+    }
+    if (order.pay_status === 'paid') {
+      send(res, req, 200, { ok: true, message: '订单已支付' });
+      return;
+    }
+    order.pay_status = 'paid';
+    order.pay_time = Date.now();
+    order.pay_channel = 'simulate';
+
+    if (order.product_type === 'basic') {
+      const license_key = genLicenseKey();
+      basicLicenses.push({
+        id: genId(),
+        order_id: order.id,
+        license_key,
+        used_at: null,
+        created_at: Date.now(),
+      });
+      send(res, req, 200, { ok: true, license_key });
+      return;
+    }
+    if (order.product_type === 'ai_week') {
+      const now = Date.now();
+      const valid_until = now + 7 * 24 * 60 * 60 * 1000;
+      const token = genAiToken();
+      aiWeekTokens.push({
+        id: genId(),
+        order_id: order.id,
+        token,
+        valid_from: now,
+        valid_until,
+        created_at: now,
+      });
+      send(res, req, 200, { ok: true, token, validUntil: new Date(valid_until).toISOString() });
+      return;
+    }
+    send(res, req, 200, { ok: true });
     return;
   }
 
