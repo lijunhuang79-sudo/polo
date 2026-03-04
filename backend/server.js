@@ -10,8 +10,43 @@ import { parse as parseUrl } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import Database from 'better-sqlite3';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const dbFile = join(__dirname, 'plc-sim.db');
+const db = new Database(dbFile);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY,
+  product_type TEXT NOT NULL,
+  amount REAL NOT NULL,
+  pay_status TEXT NOT NULL,
+  pay_channel TEXT,
+  pay_time INTEGER,
+  buyer_id TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS basic_licenses (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  license_key TEXT NOT NULL UNIQUE,
+  used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_week_tokens (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  valid_from INTEGER NOT NULL,
+  valid_until INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`);
+
 const envPath = join(__dirname, '.env');
 if (existsSync(envPath)) {
   const content = readFileSync(envPath, 'utf8');
@@ -247,11 +282,7 @@ function cors(res, req) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
-// ---------- 三档收费：内存存储（可后续改为 DB） ----------
-const orders = [];
-const basicLicenses = [];
-const aiWeekTokens = [];
-
+// ---------- 三档收费：SQLite 存储（持久化 orders / basic_licenses / ai_week_tokens） ----------
 function genId() {
   return crypto.randomBytes(8).toString('hex');
 }
@@ -263,13 +294,51 @@ function genAiToken() {
 }
 
 function findBasicLicenseByKey(licenseKey) {
-  const key = (licenseKey || '').trim();
-  return basicLicenses.find((l) => l.license_key === key);
+  const stmt = db.prepare('SELECT * FROM basic_licenses WHERE license_key = ?');
+  return stmt.get((licenseKey || '').trim());
 }
 
 function findAiTokenByToken(token) {
-  const t = (token || '').trim();
-  return aiWeekTokens.find((a) => a.token === t);
+  const stmt = db.prepare('SELECT * FROM ai_week_tokens WHERE token = ?');
+  return stmt.get((token || '').trim());
+}
+
+function insertOrder({ id, productType, amount }) {
+  const stmt = db.prepare(`
+    INSERT INTO orders (id, product_type, amount, pay_status, created_at)
+    VALUES (?, ?, ?, 'pending', ?)
+  `);
+  stmt.run(id, productType, amount, Date.now());
+}
+
+function getOrderById(orderId) {
+  const stmt = db.prepare('SELECT * FROM orders WHERE id = ?');
+  return stmt.get(orderId);
+}
+
+function updateOrderPaid(orderId) {
+  const stmt = db.prepare(`
+    UPDATE orders
+    SET pay_status = 'paid', pay_time = ?, pay_channel = 'simulate'
+    WHERE id = ?
+  `);
+  stmt.run(Date.now(), orderId);
+}
+
+function insertBasicLicense({ id, orderId, licenseKey }) {
+  const stmt = db.prepare(`
+    INSERT INTO basic_licenses (id, order_id, license_key, created_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  stmt.run(id, orderId, licenseKey, Date.now());
+}
+
+function insertAiWeekToken({ id, orderId, token, validFrom, validUntil }) {
+  const stmt = db.prepare(`
+    INSERT INTO ai_week_tokens (id, order_id, token, valid_from, valid_until, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(id, orderId, token, validFrom, validUntil, Date.now());
 }
 
 const server = http.createServer(async (req, res) => {
@@ -402,15 +471,7 @@ const server = http.createServer(async (req, res) => {
 
     const amount = productType === 'basic' ? 9.9 : 19.9;
     const orderId = genId();
-    orders.push({
-      id: orderId,
-      product_type: productType,
-      amount,
-      pay_status: 'pending',
-      pay_channel: null,
-      pay_time: null,
-      created_at: Date.now(),
-    });
+    insertOrder({ id: orderId, productType, amount });
     send(res, req, 200, { orderId, amount, productType });
     return;
   }
@@ -422,7 +483,7 @@ const server = http.createServer(async (req, res) => {
       send(res, req, 400, { error: '缺少 orderId' });
       return;
     }
-    const order = orders.find((o) => o.id === orderId);
+    const order = getOrderById(orderId);
     if (!order) {
       send(res, req, 404, { error: '订单不存在' });
       return;
@@ -430,10 +491,10 @@ const server = http.createServer(async (req, res) => {
     const out = { orderId: order.id, pay_status: order.pay_status, amount: order.amount, productType: order.product_type };
     if (order.pay_status === 'paid') {
       if (order.product_type === 'basic') {
-        const lic = basicLicenses.find((l) => l.order_id === order.id);
+        const lic = db.prepare('SELECT license_key FROM basic_licenses WHERE order_id = ?').get(order.id);
         if (lic) out.license_key = lic.license_key;
-      } else {
-        const tok = aiWeekTokens.find((a) => a.order_id === order.id);
+      } else if (order.product_type === 'ai_week') {
+        const tok = db.prepare('SELECT token, valid_until FROM ai_week_tokens WHERE order_id = ?').get(order.id);
         if (tok) {
           out.token = tok.token;
           out.validUntil = new Date(tok.valid_until).toISOString();
@@ -453,7 +514,7 @@ const server = http.createServer(async (req, res) => {
       send(res, req, 400, { error: '缺少 orderId' });
       return;
     }
-    const order = orders.find((o) => o.id === orderId);
+    const order = getOrderById(orderId);
     if (!order) {
       send(res, req, 404, { error: '订单不存在' });
       return;
@@ -462,19 +523,11 @@ const server = http.createServer(async (req, res) => {
       send(res, req, 200, { ok: true, message: '订单已支付' });
       return;
     }
-    order.pay_status = 'paid';
-    order.pay_time = Date.now();
-    order.pay_channel = 'simulate';
+    updateOrderPaid(order.id);
 
     if (order.product_type === 'basic') {
       const license_key = genLicenseKey();
-      basicLicenses.push({
-        id: genId(),
-        order_id: order.id,
-        license_key,
-        used_at: null,
-        created_at: Date.now(),
-      });
+      insertBasicLicense({ id: genId(), orderId: order.id, licenseKey: license_key });
       send(res, req, 200, { ok: true, license_key });
       return;
     }
@@ -482,14 +535,7 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       const valid_until = now + 7 * 24 * 60 * 60 * 1000;
       const token = genAiToken();
-      aiWeekTokens.push({
-        id: genId(),
-        order_id: order.id,
-        token,
-        valid_from: now,
-        valid_until,
-        created_at: now,
-      });
+      insertAiWeekToken({ id: genId(), orderId: order.id, token, validFrom: now, validUntil: valid_until });
       send(res, req, 200, { ok: true, token, validUntil: new Date(valid_until).toISOString() });
       return;
     }
