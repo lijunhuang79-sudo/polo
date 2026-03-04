@@ -180,6 +180,26 @@ export async function createOrder(
 }
 
 /**
+ * 模拟支付到账（联调用）：将订单置为已支付并发放 license/token，仅后端支持时可用。
+ */
+export async function simulateOrderCallback(orderId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const base = getApiBase();
+    const url = base ? `${base}/api/order/simulate-callback` : '/api/order/simulate-callback';
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: orderId.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && (data.ok || data.license_key || data.token)) return { ok: true };
+    return { ok: false, error: data.error || data.message || '模拟失败' };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '网络异常' };
+  }
+}
+
+/**
  * 查询订单状态；已支付时返回 license_key 或 token、validUntil。
  */
 export async function getOrderStatus(

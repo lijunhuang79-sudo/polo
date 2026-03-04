@@ -19,6 +19,7 @@ import {
   validateAiToken,
   createOrder,
   getOrderStatus,
+  simulateOrderCallback,
   setStoredBasicLicense,
   setStoredAiToken,
   setStoredAiValidUntil,
@@ -52,8 +53,10 @@ if (typeof window !== 'undefined') (window as any).__PLC_TIERED_PAYWALL = ENABLE
 const ALIPAY_QR_URL = (_env.VITE_APP_ALIPAY_QR_URL && String(_env.VITE_APP_ALIPAY_QR_URL).trim()) || '';
 /** 默认收款/跳转链接：购买页二维码使用此链接，扫码可打开对应页面 */
 const DEFAULT_QR_LINK = 'http://xhslink.com/o/Jn4l2Jo6PI';
-/** 可选：支付宝收款码/支付图图片地址。不配置时使用项目内置图 public/alipay-payment.png（与你提供的图一致） */
-const ALIPAY_QR_IMAGE = (_env.VITE_APP_ALIPAY_QR_IMAGE && String(_env.VITE_APP_ALIPAY_QR_IMAGE).trim()) || '/alipay-payment.png';
+/** 可选：支付宝收款码/支付图图片地址。不配置时使用项目内置图，路径带 BASE_URL 保证服务器部署后能正确加载 */
+const _baseUrl = (typeof import.meta !== 'undefined' && (import.meta as any).env?.BASE_URL) || '/';
+const _defaultPaymentImg = (_baseUrl.endsWith('/') ? _baseUrl : _baseUrl + '/') + 'alipay-payment.png';
+const ALIPAY_QR_IMAGE = (_env.VITE_APP_ALIPAY_QR_IMAGE && String(_env.VITE_APP_ALIPAY_QR_IMAGE).trim()) || _defaultPaymentImg;
 
 const InitialState: PLCState = {
     inputs: {},
@@ -106,6 +109,7 @@ const App: React.FC = () => {
   const [orderError, setOrderError] = useState('');
   const [orderErrorCode, setOrderErrorCode] = useState('');
   const [checkingOrder, setCheckingOrder] = useState(false);
+  const [simulatingCallback, setSimulatingCallback] = useState(false);
   const [successResult, setSuccessResult] = useState<{ type: 'basic'; license_key: string } | { type: 'ai_week'; token: string; validUntil: string } | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [copyPurchaseSuccess, setCopyPurchaseSuccess] = useState(false);
@@ -207,22 +211,44 @@ const App: React.FC = () => {
         setSuccessResult({ type: 'basic', license_key: result.license_key });
         setStoredBasicLicense(result.license_key);
         setBasicLicense(result.license_key);
+        setShowPurchaseModal(false);
+        setPendingOrderId('');
+        setPendingOrderAmount(null);
+        setPendingPayQrContent(null);
+        setPurchaseProductType(null);
+        setShowSuccessModal(true);
       } else if (result.token && result.validUntil) {
         setSuccessResult({ type: 'ai_week', token: result.token, validUntil: result.validUntil });
         setStoredAiToken(result.token);
         setStoredAiValidUntil(new Date(result.validUntil).getTime());
         setStoredAiWeekUnlocksLocal();
         setAiValidUntil(new Date(result.validUntil).getTime());
+        setShowPurchaseModal(false);
+        setPendingOrderId('');
+        setPendingOrderAmount(null);
+        setPendingPayQrContent(null);
+        setPurchaseProductType(null);
+        setShowSuccessModal(true);
+      } else {
+        setOrderError('支付已到账，但授权信息尚未生成，请稍候再点「查看订单状态」或联系客服。');
       }
-      setShowPurchaseModal(false);
-      setPendingOrderId('');
-      setPendingOrderAmount(null);
-      setPendingPayQrContent(null);
-      setPurchaseProductType(null);
-      setShowSuccessModal(true);
     } else {
-      setOrderError('订单尚未支付，请完成支付后再查询');
+      setOrderError('订单尚未支付，请完成支付后再查询。若已线下付款，可点击下方「模拟到账」进行联调。');
     }
+  };
+
+  const handleSimulateCallback = async () => {
+    if (!pendingOrderId.trim()) return;
+    setOrderError('');
+    setSimulatingCallback(true);
+    const result = await simulateOrderCallback(pendingOrderId.trim());
+    setSimulatingCallback(false);
+    if (!result.ok) {
+      setOrderError(result.error || '模拟到账失败。请确认后端已启动（如 backend 下 npm run dev，端口 3001）且前端 .env 中 VITE_APP_API_BASE=http://localhost:3001');
+      return;
+    }
+    await handleCheckOrderStatus();
+    setTimeout(() => handleCheckOrderStatus(), 400);
   };
 
   const closePurchaseModal = () => {
@@ -1186,10 +1212,13 @@ const App: React.FC = () => {
       )}
       {showPurchaseModal && purchaseProductType && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={closePurchaseModal}>
-          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-slate-800 mb-3">
-              {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 周卡 19.9 元'}
-            </h3>
+          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left relative" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="text-lg font-bold text-slate-800">
+                {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 周卡 19.9 元'}
+              </h3>
+              <button type="button" onClick={closePurchaseModal} className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-xl leading-none" aria-label="关闭">×</button>
+            </div>
             {!pendingOrderId ? (
               <>
                 <p className="text-sm text-slate-600 mb-4">
@@ -1226,13 +1255,19 @@ const App: React.FC = () => {
                   <img src={ALIPAY_QR_IMAGE} alt="推荐使用支付宝，打开支付宝扫一扫" className="max-w-full w-full max-w-sm rounded-xl shadow-lg" />
                 </div>
                 <p className="text-xs text-slate-600 text-center mb-2">请使用支付宝扫一扫上方收款码，按订单金额（{purchaseProductType === 'basic' ? '9.9' : '19.9'} 元）付款</p>
-                <p className="text-sm text-amber-700 mb-4">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
+                <p className="text-sm text-amber-700 mb-2">请完成支付后点击下方「查看订单状态」获取授权码或 AI 链接。</p>
+                <p className="text-sm text-blue-700 mb-4 font-medium">若您已用支付宝完成付款：当前未接入支付回调，请点击下方「模拟到账」补发授权码，将自动弹出激活码。</p>
                 {orderError && <p className="text-sm text-red-600 mb-2">{orderError}</p>}
-                <div className="flex gap-2">
-                  <button type="button" onClick={handleCheckOrderStatus} disabled={checkingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-green-600 text-white disabled:opacity-50">
-                    {checkingOrder ? '查询中...' : '查看订单状态'}
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <button type="button" onClick={handleCheckOrderStatus} disabled={checkingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-green-600 text-white disabled:opacity-50">
+                      {checkingOrder ? '查询中...' : '查看订单状态'}
+                    </button>
+                    <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
+                  </div>
+                  <button type="button" onClick={handleSimulateCallback} disabled={simulatingCallback} className="py-2 rounded-lg text-sm border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50">
+                    {simulatingCallback ? '处理中...' : '已线下付款，模拟到账（联调）'}
                   </button>
-                  <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">关闭</button>
                 </div>
               </>
             )}
@@ -1241,8 +1276,11 @@ const App: React.FC = () => {
       )}
       {showSuccessModal && successResult && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={closeSuccessModal}>
-          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-green-700 mb-3">购买成功</h3>
+          <div className="bg-white rounded-xl max-w-md w-full shadow-xl p-5 text-left relative" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="text-lg font-bold text-green-700">购买成功</h3>
+              <button type="button" onClick={closeSuccessModal} className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-xl leading-none" aria-label="关闭">×</button>
+            </div>
             {successResult.type === 'basic' ? (
               <>
                 <p className="text-sm text-slate-600 mb-2">请妥善保存您的基础版授权码：</p>
