@@ -32,10 +32,8 @@ const APP_DISPLAY_NAME = _env.VITE_APP_NAME ?? 'PLC 编程仿真器';
 const APP_DISPLAY_VERSION = _env.VITE_APP_VERSION ?? 'v2.0';
 /** 构建时间（仅在生产构建时注入，开发时为 undefined） */
 const APP_BUILD_TIME = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
-// 开发模式默认免登录；生产仅当显式 VITE_APP_SKIP_LOGIN=true 时免登录（商用合规）
-const SKIP_LOGIN = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)
-  ? String((import.meta as any).env.VITE_APP_SKIP_LOGIN) !== 'false'
-  : String(_env.VITE_APP_SKIP_LOGIN) === 'true';
+// 登录已关闭：默认免登录；仅当显式 VITE_APP_SKIP_LOGIN=false 时显示登录界面
+const SKIP_LOGIN = String(_env.VITE_APP_SKIP_LOGIN) !== 'false';
 // 生产环境禁止开发者后门；仅开发或显式 VITE_APP_DEV_BACKDOOR=true 时允许（商用合规）
 const ALLOW_DEV_BACKDOOR = (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) || String(_env.VITE_APP_DEV_BACKDOOR) === 'true';
 /** 开发者调试入口密码（仅当 ALLOW_DEV_BACKDOOR 为 true 时有效；可在此修改） */
@@ -712,47 +710,47 @@ const App: React.FC = () => {
       <main className="container mx-auto px-3 sm:px-4 mt-4 sm:mt-8 max-w-6xl space-y-4 sm:space-y-8">
         <ErrorBoundary fallbackTitle="功能加载异常">
         <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 border-b pb-4 gap-3 sm:gap-4">
-              <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
+          <div className="flex flex-col md:flex-row md:flex-wrap justify-between items-stretch md:items-center mb-4 border-b pb-4 gap-3 sm:gap-4">
+              <h2 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2 shrink-0">
                 <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">01</span> 
                 场景需求描述
               </h2>
               {ENABLE_TIERED_PAYWALL && !hasBasic && (
-                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                <div className="flex flex-wrap items-center gap-2 w-full md:w-auto min-w-0">
                   <span className="text-sm text-slate-600">免费档仅可体验 2 个场景</span>
-                  <button type="button" onClick={() => setShowActivateBasic((v) => !v)} className="text-sm font-medium text-blue-600 hover:underline">
+                  <button type="button" onClick={() => setShowActivateBasic((v) => !v)} className="text-sm font-medium text-blue-600 hover:underline shrink-0">
                     已有授权码？激活
                   </button>
                 </div>
               )}
               {ENABLE_TIERED_PAYWALL && showActivateBasic && (
-                <div className="w-full rounded-lg bg-slate-50 border border-slate-200 p-3 flex flex-col sm:flex-row gap-2">
+                <div className="w-full md:min-w-0 md:max-w-sm rounded-lg bg-slate-50 border border-slate-200 p-3 flex flex-col sm:flex-row gap-2 shrink-0">
                   <input
                     type="text"
                     placeholder="请输入基础版授权码"
                     value={licenseInput}
                     onChange={(e) => { setLicenseInput(e.target.value); setActivateError(''); }}
-                    className="flex-1 px-3 py-2 border border-slate-300 rounded-md text-sm"
+                    className="flex-1 min-w-0 px-3 py-2 border border-slate-300 rounded-md text-sm"
                   />
-                  <button type="button" onClick={handleActivateBasic} disabled={activating} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium disabled:opacity-50">
+                  <button type="button" onClick={handleActivateBasic} disabled={activating} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium disabled:opacity-50 shrink-0">
                     {activating ? '验证中...' : '激活'}
                   </button>
-                  {activateError && <span className="text-sm text-red-600">{activateError}</span>}
+                  {activateError && <span className="text-sm text-red-600 shrink-0">{activateError}</span>}
                 </div>
               )}
-              <div className="flex bg-slate-100 p-1 rounded-lg w-full md:w-auto">
+              <div className="flex bg-slate-100 p-1 rounded-lg w-full md:w-auto min-w-0 max-w-full shrink-0">
                   <button 
                     onClick={() => setGenMode('local')}
-                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'local' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`flex-1 min-w-0 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] truncate ${genMode === 'local' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
                   >
-                    <HardDrive size={16} /> 本地生成
+                    <HardDrive size={16} className="shrink-0" /> <span className="truncate">本地生成</span>
                   </button>
                   <button 
                     onClick={() => hasAiValid && setGenMode('ai')}
-                    className={`flex-1 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : hasAiValid ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 cursor-default'}`}
+                    className={`flex-1 min-w-0 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] truncate ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : hasAiValid ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 cursor-default'}`}
                     title={!hasAiValid ? '请先购买 19.9 元 AI 周卡' : undefined}
                   >
-                    <Bot size={16} /> AI 智能生成
+                    <Bot size={16} className="shrink-0" /> <span className="truncate">AI 智能生成</span>
                   </button>
               </div>
           </div>
