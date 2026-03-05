@@ -235,7 +235,7 @@ const App: React.FC = () => {
         setOrderError('支付已到账，但授权信息尚未生成，请稍候再点「查看订单状态」或联系客服。');
       }
     } else {
-      setOrderError(IS_LOCALHOST ? '订单尚未支付，请完成支付后再查询。若已线下付款，可点击下方「模拟到账」进行联调。' : '订单尚未支付，请完成支付后由管理员确认到账，再点击「查看订单状态」。');
+      setOrderError(IS_LOCALHOST ? '订单尚未支付，请完成支付后再查询。若已线下付款，可点击下方「模拟到账」进行联调。' : '订单尚未支付，若已支付，请等待管理员确认，再点击「查看订单状态」。');
     }
   };
 
@@ -1255,8 +1255,8 @@ const App: React.FC = () => {
                 <div className="mb-2 flex justify-center">
                   <img src={ALIPAY_QR_IMAGE} alt="支付宝收款码" className="max-w-[200px] w-full rounded-lg shadow" />
                 </div>
-                <p className="text-xs text-slate-600 text-center mb-1.5">扫码付 {purchaseProductType === 'basic' ? '9.9' : '19.9'} 元，付完点「查看订单状态」取激活码。</p>
-                {!IS_LOCALHOST && <p className="text-xs text-slate-500 text-center mb-2">到账由管理员确认后即可查询。</p>}
+                <p className="text-xs text-slate-600 text-center mb-1.5">扫码付 {purchaseProductType === 'basic' ? '9.9' : '19.9'} 元，付完后把订单号发送到微信 elicwinner 确认。</p>
+                {!IS_LOCALHOST && <p className="text-xs text-slate-500 text-center mb-2">确认后可在本页点击「查看订单状态」取激活码。</p>}
                 {orderError && <p className="text-xs text-red-600 mb-2">{orderError}</p>}
                 <div className="flex flex-col gap-1.5">
                   <div className="flex gap-2">
