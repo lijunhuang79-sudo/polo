@@ -1,20 +1,18 @@
-# 推送到 main 后自动部署到服务器
+# 推送到 main 后自动部署到 plc-sim.com（也可在 Actions 页手动 Run workflow）
 # 仓库: https://github.com/lijunhuang79-sudo/polo
-# 维护: PoloHuang <lijunlhuang79@gmail.com>
 #
-# 使用前在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加：
-#   DEPLOY_SSH_KEY: 服务器 SSH 私钥（完整内容，用于 root@213.111.157.18）
-# 若服务器不是 root@213.111.157.18，请改下面 env 中的 DEPLOY_HOST / DEPLOY_USER。
+# 在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置：
+#   DEPLOY_SSH_KEY   — 服务器 SSH 私钥全文（必填）
+#   SSH_HOST         — 主机，如 plc-sim.com 或 213.111.157.18（必填）
+#   SSH_USERNAME     — SSH 用户名，如 root（必填）
+#   SSH_PORT         — SSH 端口，不填则默认 22（可选）
 
-name: Deploy to PLC-Sim Server
+name: Deploy via SSH (plc-sim.com)
 
 on:
   push:
     branches: [main]
-
-env:
-  DEPLOY_HOST: 213.111.157.18
-  DEPLOY_USER: root
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -25,15 +23,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Deploy via SSH
+      - name: SSH 到服务器并执行部署
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ env.DEPLOY_HOST }}
-          username: ${{ env.DEPLOY_USER }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: 22
+          port: ${{ secrets.SSH_PORT || '22' }}
           script: |
             set -e
+            whoami
+            hostname
+            echo "SSH 连接成功 — 开始部署"
             export REPO_URL="https://github.com/lijunhuang79-sudo/polo.git"
             export REPO_BRANCH="main"
             export REPO_ROOT="/var/www/plc-sim/polo"
@@ -51,7 +52,7 @@ jobs:
             mkdir -p "$FRONTEND_WWW"
             rsync -a --delete dist/ "$FRONTEND_WWW/"
             if [ -d backend ] && [ -f backend/server.js ]; then
-              cd backend
+              cd "$REPO_ROOT/backend"
               if command -v pm2 >/dev/null 2>&1; then
                 pm2 restart plc-sim-api --update-env || pm2 start server.js --name plc-sim-api
                 pm2 save
