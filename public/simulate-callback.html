@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>模拟到账</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 16px; background: #f5f5f5; min-height: 100vh; }
+    .card { max-width: 400px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    h1 { font-size: 1.25rem; margin: 0 0 16px; color: #1e293b; }
+    label { display: block; font-size: 0.875rem; color: #64748b; margin-bottom: 4px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 12px; font-size: 1rem; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 12px; }
+    .optional { font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; }
+    button { width: 100%; padding: 14px; font-size: 1rem; font-weight: 600; color: #fff; background: #16a34a; border: none; border-radius: 8px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    button:active { opacity: 0.9; }
+    #result { margin-top: 16px; padding: 12px; border-radius: 8px; font-size: 0.875rem; white-space: pre-wrap; word-break: break-all; display: none; }
+    #result.success { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    #result.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .hint { font-size: 0.75rem; color: #94a3b8; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>模拟到账</h1>
+    <label for="apiBase">API 根地址（可选，留空则用当前网站）</label>
+    <input type="text" id="apiBase" placeholder="例如 https://www.plc-sim.com" autocomplete="off">
+    <label for="orderId">订单号</label>
+    <input type="text" id="orderId" placeholder="请输入订单号" autocomplete="off" inputmode="text">
+    <p class="optional">若服务器需 Basic 认证，可填写下方（否则留空）</p>
+    <label for="authUser">认证用户名（可选）</label>
+    <input type="text" id="authUser" placeholder="留空则使用当前页登录" autocomplete="off">
+    <label for="authPass">认证密码（可选）</label>
+    <input type="password" id="authPass" placeholder="留空则使用当前页登录" autocomplete="off">
+    <button type="button" id="btn">模拟到账</button>
+    <div id="result"></div>
+    <p class="hint">部署后访问：本站/simulate-callback.html（如 https://www.plc-sim.com/simulate-callback.html），手机与电脑浏览器均可使用。本地打开时请在「API 根地址」填服务器地址。</p>
+  </div>
+  <script>
+    (function () {
+      var orderIdEl = document.getElementById('orderId');
+      var apiBaseEl = document.getElementById('apiBase');
+      var authUserEl = document.getElementById('authUser');
+      var authPassEl = document.getElementById('authPass');
+      var btnEl = document.getElementById('btn');
+      var resultEl = document.getElementById('result');
+
+      function getApiBase() {
+        var v = (apiBaseEl.value || '').trim();
+        if (v) return v.replace(/\/$/, '');
+        return window.location.origin;
+      }
+
+      function showResult(ok, text) {
+        resultEl.style.display = 'block';
+        resultEl.className = ok ? 'success' : 'error';
+        resultEl.textContent = text;
+      }
+
+      btnEl.addEventListener('click', function () {
+        var orderId = (orderIdEl.value || '').trim();
+        if (!orderId) {
+          showResult(false, '请填写订单号');
+          orderIdEl.focus();
+          return;
+        }
+        var apiBase = getApiBase();
+        if (!apiBase || apiBase === 'null' || apiBase.indexOf('file') === 0) {
+          showResult(false, '请填写 API 根地址（如 https://www.plc-sim.com）');
+          apiBaseEl.focus();
+          return;
+        }
+        var url = apiBase + '/api/order/simulate-callback';
+        var headers = { 'Content-Type': 'application/json' };
+        var user = (authUserEl.value || '').trim();
+        var pass = (authPassEl.value || '').trim();
+        if (user && pass) {
+          headers['Authorization'] = 'Basic ' + btoa(unescape(encodeURIComponent(user + ':' + pass)));
+        }
+        btnEl.disabled = true;
+        resultEl.style.display = 'none';
+        fetch(url, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({ orderId: orderId }),
+          credentials: 'include'
+        })
+          .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+          .then(function (r) {
+            btnEl.disabled = false;
+            if (r.ok && (r.data.ok || r.data.license_key || r.data.token)) {
+              var lines = ['模拟到账成功'];
+              if (r.data.license_key) lines.push('基础版授权码: ' + r.data.license_key);
+              if (r.data.token) lines.push('AI 周卡 token: ' + r.data.token);
+              if (r.data.validUntil) lines.push('有效期至: ' + r.data.validUntil);
+              showResult(true, lines.join('\n'));
+            } else {
+              var msg = r.data.error || r.data.message || '请求失败';
+              if (r.data && !r.ok && (r.data.error || '').indexOf('401') !== -1) msg += '\n若需认证，请填写上方用户名和密码后重试。';
+              showResult(false, msg);
+            }
+          })
+          .catch(function (e) {
+            btnEl.disabled = false;
+            showResult(false, '请求异常: ' + (e.message || String(e)));
+          });
+      });
+
+      orderIdEl.focus();
+    })();
+  </script>
+</body>
+</html>
