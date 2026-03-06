@@ -6,13 +6,21 @@
 
 ## 一、备份方式与文件位置
 
-| 环境   | 操作方式                         | 备份逻辑脚本        |
-|--------|----------------------------------|---------------------|
-| Windows | 双击 `backup-branch-run.bat`     | backup-branch.bat    |
-| Mac    | 双击 `backup-branch-run.command` | backup-branch.sh     |
+| 环境   | 操作方式 | 备份逻辑脚本 |
+|--------|----------|--------------|
+| Windows | 双击 `backup-branch-run.bat` | `backup-branch.bat` |
+| Mac 本地备份 | 双击 `backup-branch-run.command` | `backup-branch.sh` |
+| Mac 备份并推送远程 | 双击 `backup-branch-push-run.command` | `backup-branch-push.sh` |
+
+说明：`backup-branch.sh`、`backup-branch-run.command`、`backup-branch-push.sh`、`backup-branch-push-run.command` 都属于项目内的 Mac 备份脚本，应保留在仓库根目录，不应在后续整理文件时删除。
 
 备份结果：在**当前仓库**中多出一个本地分支 `backup/当天日期`，并产生一次提交（有改动则正常提交，无改动则 `--allow-empty`）。  
-若已配置远程并执行过 `git push`，远程也会存在对应分支（如 `origin/backup/20260303`）。
+若使用 `backup-branch-push.sh` / `backup-branch-push-run.command`，脚本还会自动执行 `git push -u origin backup/YYYYMMDD`，远程也会存在对应分支（如 `origin/backup/20260303`）。
+
+### 1.1 两种 Mac 备份方式怎么选
+
+- 仅想在本机留一份备份：用 `backup-branch-run.command`
+- 想本地备份后顺手推到 GitHub：用 `backup-branch-push-run.command`
 
 ---
 
@@ -125,6 +133,9 @@ git log backup/20260303 -5
 
 **Q：远程有没有备份分支？**  
 - 执行 `git push origin backup/YYYYMMDD` 后，远程才会有该备份分支；仅本地备份时远程不会自动出现。
+
+**Q：双击 `backup-branch-push-run.command` 后提示找不到远程 origin？**  
+- 说明当前仓库还没配置 GitHub 远程，先执行 `git remote -v` 检查；若没有 `origin`，需要先添加远程仓库地址，再重新运行该脚本。
 
 **Q：想恢复某备份到当前 main 可以吗？**  
 - 可以，但不建议直接强制覆盖。推荐做法：`git checkout backup/YYYYMMDD` 查看确认后，把需要的文件复制出来，再在 `main` 上手动合并或粘贴；或使用 `git merge backup/YYYYMMDD`（可能产生合并提交，需根据需求决定）。
