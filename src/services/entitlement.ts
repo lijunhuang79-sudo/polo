@@ -8,6 +8,37 @@ const STORAGE_AI_TOKEN = 'plc_tier_ai_token';
 const STORAGE_AI_VALID_UNTIL = 'plc_tier_ai_valid_until';
 /** AI 周卡购买后永久解锁本地生成全部场景 */
 const STORAGE_AI_WEEK_UNLOCKS_LOCAL = 'plc_tier_ai_week_unlocks_local';
+/** 待支付订单：用户关闭网页后重新进入时恢复弹窗 */
+const STORAGE_PENDING_PAYMENT = 'plc_tier_pending_payment';
+
+/** 待支付订单结构 */
+export interface PendingPayment {
+  orderId: string;
+  productType: 'basic' | 'ai_week';
+  amount: number | null;
+}
+
+export function getStoredPendingPayment(): PendingPayment | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const s = localStorage.getItem(STORAGE_PENDING_PAYMENT);
+    if (!s) return null;
+    const parsed = JSON.parse(s) as PendingPayment;
+    if (!parsed?.orderId || !parsed?.productType) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredPendingPayment(data: PendingPayment | null): void {
+  if (typeof window === 'undefined') return;
+  if (!data) {
+    localStorage.removeItem(STORAGE_PENDING_PAYMENT);
+    return;
+  }
+  localStorage.setItem(STORAGE_PENDING_PAYMENT, JSON.stringify(data));
+}
 
 /** 免费档可用的典型场景：按 SCENARIOS 的 title 匹配（启保停控制、延时启动） */
 export const FREE_SCENARIO_TITLES = ['基础: 启保停控制', '基础: 延时启动'];

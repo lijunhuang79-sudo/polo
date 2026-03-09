@@ -24,6 +24,8 @@ import {
   setStoredAiToken,
   setStoredAiValidUntil,
   setStoredAiWeekUnlocksLocal,
+  getStoredPendingPayment,
+  setStoredPendingPayment,
 } from './services/entitlement';
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
@@ -115,6 +117,7 @@ const App: React.FC = () => {
   const [successResult, setSuccessResult] = useState<{ type: 'basic'; license_key: string } | { type: 'ai_week'; token: string; validUntil: string } | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [copyPurchaseSuccess, setCopyPurchaseSuccess] = useState(false);
+  const [copyOrderIdSuccess, setCopyOrderIdSuccess] = useState(false);
   // 基础版 或 曾购买过 AI 周卡：永久本地生成全部场景；AI 生成仅 7 天内有效
   const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense || getStoredAiWeekUnlocksLocal();
   const hasAiValid = !ENABLE_TIERED_PAYWALL || (aiValidUntil != null && aiValidUntil > Date.now());
@@ -157,6 +160,17 @@ const App: React.FC = () => {
     });
   }, [ENABLE_TIERED_PAYWALL]);
 
+  // 三档：页面加载时恢复待支付弹窗（用户关闭网页后重新进入不丢失订单号）
+  useEffect(() => {
+    if (!ENABLE_TIERED_PAYWALL) return;
+    const pending = getStoredPendingPayment();
+    if (!pending) return;
+    setPurchaseProductType(pending.productType);
+    setPendingOrderId(pending.orderId);
+    setPendingOrderAmount(pending.amount);
+    setShowPurchaseModal(true);
+  }, [ENABLE_TIERED_PAYWALL]);
+
   const handleActivateBasic = async () => {
     setActivateError('');
     setActivating(true);
@@ -192,6 +206,7 @@ const App: React.FC = () => {
       setPendingOrderId(result.orderId);
       setPendingOrderAmount(result.amount ?? null);
       setPendingPayQrContent(result.payQrContent ?? null);
+      setStoredPendingPayment({ orderId: result.orderId, productType: purchaseProductType, amount: result.amount ?? null });
     } else {
       setOrderError(result.error || result.code || '创建订单失败');
       setOrderErrorCode(result.code || '');
@@ -209,6 +224,7 @@ const App: React.FC = () => {
       return;
     }
     if (result.pay_status === 'paid') {
+      setStoredPendingPayment(null);
       if (result.license_key) {
         setSuccessResult({ type: 'basic', license_key: result.license_key });
         setStoredBasicLicense(result.license_key);
@@ -239,6 +255,42 @@ const App: React.FC = () => {
     }
   };
 
+  // 支付弹窗打开且有订单号时：轮询订单状态，后端模拟到账后自动关闭弹窗并解锁权限
+  useEffect(() => {
+    if (!ENABLE_TIERED_PAYWALL || !showPurchaseModal || !pendingOrderId.trim() || !purchaseProductType) return;
+    const poll = async () => {
+      const result = await getOrderStatus(pendingOrderId.trim());
+      if (!result.ok || result.pay_status !== 'paid') return;
+      setStoredPendingPayment(null);
+      if (result.license_key) {
+        setSuccessResult({ type: 'basic', license_key: result.license_key });
+        setStoredBasicLicense(result.license_key);
+        setBasicLicense(result.license_key);
+        setShowPurchaseModal(false);
+        setPendingOrderId('');
+        setPendingOrderAmount(null);
+        setPendingPayQrContent(null);
+        setPurchaseProductType(null);
+        setShowSuccessModal(true);
+      } else if (result.token && result.validUntil) {
+        setSuccessResult({ type: 'ai_week', token: result.token, validUntil: result.validUntil });
+        setStoredAiToken(result.token);
+        setStoredAiValidUntil(new Date(result.validUntil).getTime());
+        setStoredAiWeekUnlocksLocal();
+        setAiValidUntil(new Date(result.validUntil).getTime());
+        setShowPurchaseModal(false);
+        setPendingOrderId('');
+        setPendingOrderAmount(null);
+        setPendingPayQrContent(null);
+        setPurchaseProductType(null);
+        setShowSuccessModal(true);
+      }
+    };
+    const t = setInterval(poll, 4000);
+    poll(); // 立即查一次
+    return () => clearInterval(t);
+  }, [ENABLE_TIERED_PAYWALL, showPurchaseModal, pendingOrderId, purchaseProductType]);
+
   const handleSimulateCallback = async () => {
     if (!pendingOrderId.trim()) return;
     setOrderError('');
@@ -261,6 +313,8 @@ const App: React.FC = () => {
     setPendingPayQrContent(null);
     setOrderError('');
     setOrderErrorCode('');
+    setCopyOrderIdSuccess(false);
+    // 不在此清除 setStoredPendingPayment，以便用户关闭网页后重新进入时仍能恢复弹窗看到订单号
   };
 
   const closeSuccessModal = () => {
@@ -1241,16 +1295,28 @@ const App: React.FC = () => {
                 <p className="text-xs text-slate-500 mb-3">点击「去支付」后将向服务器申请订单号，成功后会在此显示订单号及「查看订单状态」按钮。</p>
                 <div className="flex gap-2">
                   <button type="button" onClick={handleCreateOrder} disabled={creatingOrder} className="flex-1 py-2.5 rounded-lg font-medium bg-blue-600 text-white disabled:opacity-50">
-                    {creatingOrder ? '创建中...' : '去支付（占位）'}
+                    {creatingOrder ? '创建中...' : '去支付'}
                   </button>
                   <button type="button" onClick={closePurchaseModal} className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">取消</button>
                 </div>
               </>
             ) : (
               <>
-                <div className="mb-2 py-1.5 px-2 rounded bg-slate-100 border border-slate-200 flex items-baseline gap-2">
+                <div className="mb-2 py-1.5 px-2 rounded bg-slate-100 border border-slate-200 flex items-center gap-2">
                   <span className="text-xs text-slate-500 shrink-0">订单号</span>
-                  <span className="text-sm font-mono font-bold text-slate-800 break-all">{pendingOrderId}</span>
+                  <span className="text-sm font-mono font-bold text-slate-800 break-all flex-1 min-w-0">{pendingOrderId}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(pendingOrderId).then(() => {
+                        setCopyOrderIdSuccess(true);
+                        setTimeout(() => setCopyOrderIdSuccess(false), 2000);
+                      });
+                    }}
+                    className="shrink-0 px-2 py-1 rounded text-xs font-medium bg-slate-200 hover:bg-slate-300 text-slate-700"
+                  >
+                    {copyOrderIdSuccess ? '已复制' : '复制'}
+                  </button>
                 </div>
                 <div className="mb-2 flex justify-center">
                   <img src={ALIPAY_QR_IMAGE} alt="支付宝收款码" className="max-w-[200px] w-full rounded-lg shadow" />

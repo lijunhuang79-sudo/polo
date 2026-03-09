@@ -7,6 +7,7 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   server: {
+    port: 5173,
     host: true,
     proxy: {
       '/api': {
