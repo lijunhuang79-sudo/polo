@@ -57,7 +57,7 @@ export const generateSolution = (logic: LogicConfig, scenarioText: string): Gene
   let scl = "";
 
   // 1. Initialize Standard Electrical BOM (Cabinet essentials)
-  hardware.push({ name: 'PLC CPU 主机', model: 'CPU 224XP (或同级 S7-1200)', qty: 1, spec: 'DC/DC/DC, 14DI/10DO', note: '核心控制器', required: true });
+  hardware.push({ name: 'PLC CPU 主机', model: 'S7-200 SMART ST20/SR20 (12DI/8DO，或 CR40 等)', qty: 1, spec: 'DC 24V, 12DI/8DO', note: '核心控制器，与生成 STL/LAD 兼容', required: true });
   hardware.push({ name: '开关电源', model: 'LRS-50-24', qty: 1, spec: 'In: 220VAC, Out: 24VDC 2.2A', note: 'PLC及传感器供电', required: true });
   hardware.push({ name: '微型断路器 (MCB)', model: 'DZ47-63 1P+N C6', qty: 1, spec: '6A', note: '总电源保护', required: true });
   hardware.push({ name: '接线端子排', model: 'UK-2.5B', qty: 20, spec: '2.5mm²', note: 'IO接线', required: false });

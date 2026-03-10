@@ -45,7 +45,7 @@ The JSON MUST match this TypeScript shape:
   }],
   "hardware": [{
     "name": "PLC",
-    "model": "CPU 224XP",
+    "model": "S7-200 SMART ST20",
     "qty": 1,
     "spec": "",
     "note": "",
@@ -77,7 +77,7 @@ The JSON MUST match this TypeScript shape:
 }
 
 Important:
-- IO addresses must be realistic S7-style strings like "I0.0", "I0.1", "Q0.0", "AIW0".
+- IO addresses must be realistic S7-style strings like "I0.0", "I0.1", "Q0.0", "AIW0". Prefer S7-200 SMART compatible ranges (e.g. I0.x, Q0.x, M0.x; timers T37-T63 for 100ms TON).
 - IO, hardware, and program comments must clearly match the described scene.
 - logicConfig must be consistent with both the natural language description AND logic_hints.
 `;
@@ -120,70 +120,6 @@ export async function testDeepSeekConnection(apiKey: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/** 生产生成使用；与《Gemini_Connection_Fix_Sop》一致 */
-const GEMINI_MODEL_GENERATE = 'gemini-3.1-pro-preview';
-/** 连接测试使用，兼容性更好；与 SOP 一致 */
-const GEMINI_MODEL_TEST = 'gemini-flash-latest';
-
-export async function callGeminiAI(apiKey: string, userPrompt: string): Promise<GeneratedSolution> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_GENERATE}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\nUser request:\n' + userPrompt }] }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
-    })
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    if (typeof console !== 'undefined' && console.log) {
-      console.log('Gemini Generate Error Response', data);
-    }
-    const errMsg = (data?.error?.message || data?.message) || JSON.stringify(data?.error || data);
-    throw new Error(errMsg);
-  }
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  let content = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-  const first = content.indexOf('{');
-  const last = content.lastIndexOf('}');
-  if (first !== -1 && last !== -1) content = content.slice(first, last + 1);
-  return JSON.parse(content) as GeneratedSolution;
-}
-
-export async function testGeminiConnection(apiKey: string): Promise<boolean> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_TEST}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: 'Ping' }] }],
-      generationConfig: { maxOutputTokens: 1 }
-    })
-  });
-  const data = await res.json();
-  if (typeof console !== 'undefined' && console.log) {
-    console.log('Gemini Test Full Response', data);
-  }
-  if (!res.ok) {
-    const errPayload = data?.error || data;
-    const errMsg = typeof errPayload === 'string' ? errPayload : JSON.stringify(errPayload || { message: `HTTP ${res.status}` });
-    throw new Error(errMsg);
-  }
-  const candidate = data.candidates?.[0];
-  const finishReason = candidate?.finishReason || candidate?.content?.finishReason;
-  if (finishReason === 'STOP' || finishReason === 'MAX_TOKENS') {
-    return true;
-  }
-  if (finishReason) {
-    throw new Error(JSON.stringify({ finishReason, message: `API 返回: ${finishReason}`, raw: data }));
-  }
-  if (data.candidates?.[0]?.content?.parts?.length) {
-    return true;
-  }
-  throw new Error(JSON.stringify(data?.error || data || { message: 'Unknown Gemini response' }));
 }
 
 /** GPT5.2 Pro / OpenAI 接口：OpenAI Chat Completions API，模型 gpt-5.2-pro */

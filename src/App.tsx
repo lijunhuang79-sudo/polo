@@ -45,8 +45,8 @@ const USE_BACKEND_AI = (typeof import.meta !== 'undefined' && (import.meta as an
   : String(_env.VITE_APP_USE_BACKEND_AI) !== 'false';
 /** 调试用：在浏览器控制台输入 __PLC_USE_BACKEND_AI 可查看当前构建的实际值（true=不显示 Key 输入框，false=显示） */
 if (typeof window !== 'undefined') (window as any).__PLC_USE_BACKEND_AI = USE_BACKEND_AI;
-/** 当前可选 AI 模型（GPT5.2 Pro 暂关闭，仅显示 DeepSeek 与 Gemini） */
-const SELECTABLE_AI_MODELS: AiModelId[] = ['deepseek', 'gemini'];
+/** 当前可选 AI 模型（仅显示 DeepSeek） */
+const SELECTABLE_AI_MODELS: AiModelId[] = ['deepseek'];
 /** 三档收费开关：VITE_APP_TIERED_PAYWALL=true 时启用免费/9.9/19.9 档位控制 */
 const ENABLE_TIERED_PAYWALL = String(_env.VITE_APP_TIERED_PAYWALL) === 'true';
 /** 调试用：在控制台输入 __PLC_TIERED_PAYWALL 可查看三档开关（true=显示购买/升级等入口） */
@@ -539,7 +539,7 @@ const App: React.FC = () => {
             try {
                 if (USE_BACKEND_AI && SELECTABLE_AI_MODELS.includes(aiModel)) {
                     rawSol = await backendGenerate({
-                        model: aiModel as 'deepseek' | 'gemini',
+                        model: aiModel as 'deepseek' | 'codex',
                         prompt: aiPrompt,
                         logicHints: logicHint,
                     });

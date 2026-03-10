@@ -107,7 +107,6 @@ function getApiKey(model) {
   const env = process.env;
   switch (model) {
     case 'deepseek': return env.DEEPSEEK_API_KEY || '';
-    case 'gemini': return env.GEMINI_API_KEY || '';
     case 'codex': return env.OPENAI_API_KEY || '';
     default: return '';
   }
@@ -154,27 +153,6 @@ async function callDeepSeek(apiKey, userPrompt) {
   return JSON.parse(jsonStr);
 }
 
-async function callGemini(apiKey, userPrompt) {
-  const model = 'gemini-3.1-pro-preview';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + '\n\nUser request:\n' + userPrompt }] }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
-    })
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    const errMsg = (data?.error?.message || data?.message) || (data?.error ? JSON.stringify(data.error) : `Gemini API ${res.status}`);
-    throw new Error(errMsg);
-  }
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const jsonStr = extractJsonFromContent(text);
-  return JSON.parse(jsonStr);
-}
-
 async function callCodex(apiKey, userPrompt) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -202,7 +180,6 @@ async function callCodex(apiKey, userPrompt) {
 async function generateWithModel(model, apiKey, userPrompt) {
   switch (model) {
     case 'deepseek': return callDeepSeek(apiKey, userPrompt);
-    case 'gemini': return callGemini(apiKey, userPrompt);
     case 'codex': return callCodex(apiKey, userPrompt);
     default:
       throw new Error(`Unsupported model: ${model}`);
@@ -219,21 +196,6 @@ async function testConnection(model, apiKey) {
         body: JSON.stringify({ model: 'deepseek-coder', messages: [{ role: 'user', content: 'Ping' }], max_tokens: 1 })
       });
       return res.ok;
-    }
-    if (model === 'gemini') {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(apiKey)}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Ping' }] }], generationConfig: { maxOutputTokens: 1 } })
-      });
-      const data = await res.json();
-      if (!res.ok) return false;
-      const candidate = data.candidates?.[0];
-      const finishReason = candidate?.finishReason;
-      if (finishReason === 'STOP' || finishReason === 'MAX_TOKENS') return true;
-      if (candidate?.content?.parts?.length) return true;
-      return false;
     }
     if (model === 'codex') {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {

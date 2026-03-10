@@ -9,7 +9,7 @@ const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (i
 const API_BASE = String(_env.VITE_APP_API_BASE || '').replace(/\/$/, '') || 'https://api.plc-sim.com';
 
 export interface BackendGenerateParams {
-  model: 'deepseek' | 'gemini' | 'codex';
+  model: 'deepseek' | 'codex';
   prompt: string;
   logicHints?: Partial<LogicConfig>;
 }
@@ -40,7 +40,7 @@ export async function backendGenerate(params: BackendGenerateParams): Promise<Ge
 /**
  * 测试后端 AI 连通性（可选，用于 UI 显示「平台 AI 可用」）
  */
-export async function backendTestConnection(model: 'deepseek' | 'gemini' | 'codex'): Promise<boolean> {
+export async function backendTestConnection(model: 'deepseek' | 'codex'): Promise<boolean> {
   try {
     const url = `${API_BASE}/api/ai/test?model=${encodeURIComponent(model)}`;
     const res = await fetch(url, { method: 'GET' });

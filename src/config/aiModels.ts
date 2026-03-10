@@ -2,15 +2,13 @@ import { GeneratedSolution } from '../types';
 import {
   callDeepSeekAI,
   testDeepSeekConnection,
-  callGeminiAI,
-  testGeminiConnection,
   callCodexAI,
   testCodexConnection,
   callQwenAI,
   testQwenConnection,
 } from '../services/aiGenerator';
 
-export type AiModelId = 'deepseek' | 'gemini' | 'qwen' | 'codex';
+export type AiModelId = 'deepseek' | 'qwen' | 'codex';
 
 export interface AiModelConfig {
   name: string;
@@ -27,13 +25,6 @@ export const AI_MODEL_CONFIGS: Record<AiModelId, AiModelConfig> = {
     modelLabel: 'deepseek-coder (V2)',
     testConnection: testDeepSeekConnection,
     generate: callDeepSeekAI,
-  },
-  gemini: {
-    name: 'Gemini',
-    placeholder: '请输入 Gemini API Key (AIzaSy...)',
-    modelLabel: 'gemini-3.1-pro-preview',
-    testConnection: testGeminiConnection,
-    generate: callGeminiAI,
   },
   qwen: {
     name: 'Qwen Coder Plus',

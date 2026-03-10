@@ -110,7 +110,7 @@ export function validateAndNormalizeSolution(raw: unknown): { valid: true; sol: 
       { addr: 'I0.1', symbol: 'STOP', device: '停止', type: 'DI', spec: '', location: '', note: '', isMomentary: true },
       { addr: 'Q0.0', symbol: 'KM1', device: '输出', type: 'DO', spec: '', location: '', note: '' },
     ],
-    hardware: hwList.length > 0 ? hwList : [{ name: 'PLC', model: 'CPU 224XP', qty: 1, spec: '', note: '', required: true }],
+    hardware: hwList.length > 0 ? hwList : [{ name: 'PLC', model: 'S7-200 SMART ST20', qty: 1, spec: '', note: '', required: true }],
     stlCode,
     ladCode,
     sclCode,
@@ -162,7 +162,7 @@ export function ensureBomMatchesIo(io: IOPoint[], hardware: HardwareItem[]): Har
   const required: HardwareItem[] = [];
 
   if (!hasName('plc') && !hasName('cpu')) {
-    required.push({ name: 'PLC CPU 主机', model: 'CPU 224XP (或同级 S7-1200)', qty: 1, spec: 'DC/DC/DC, 14DI/10DO', note: '核心控制器', required: true });
+    required.push({ name: 'PLC CPU 主机', model: 'S7-200 SMART ST20/SR20', qty: 1, spec: 'DC 24V, 12DI/8DO', note: '核心控制器', required: true });
   }
   if (!hasName('开关电源')) {
     required.push({ name: '开关电源', model: 'LRS-50-24', qty: 1, spec: 'In: 220VAC, Out: 24VDC 2.2A', note: 'PLC及传感器供电', required: true });
