@@ -1,16 +1,21 @@
 import { LogicConfig, GeneratedSolution, IOPoint, HardwareItem, PLCState } from '../types';
 import { updateTON, applyMotorPhysics, applyElevatorPhysics, applyGarageDoorPhysics, applyCountingConveyorPhysics } from './simKernel';
+import { detectHomeworkKind, generateHomeworkSolution, homeworkLogicFlags, runHomeworkPlcCycle, homeworkKindFromLogic } from './homeworkScenarios';
 
 // --- Analysis Logic ---
 export const detectLogic = (scenario: string): LogicConfig => {
   const text = scenario.toLowerCase();
+  const homeworkKind = detectHomeworkKind(scenario);
+  if (homeworkKind) {
+    return { ...defaultLogicConfig(), ...homeworkLogicFlags(homeworkKind) } as LogicConfig;
+  }
   
   const hasStartStop = /启.*停|自锁|保停|启保停|保持.*停止|点动|启动.*停止|启停/i.test(text);
   const hasInterlock = /正反转|正转.*反转|互锁|forward.*reverse|双向|来回/i.test(text);
   const hasDelayOn = /延时.*启动|启动.*延时|通电延时|延时\s*\d+\s*秒|\d+\s*秒.*后.*启动/i.test(text);
   const hasDoublePressStart = /按两次|两次启动|二次按下|双次启动|第二次按下|需按两次|间隔\s*\d+\s*秒|超过\s*\d+\s*秒.*重置|否则无效|两次.*间隔|间隔.*否则无效/i.test(text);
   const hasCounting = /计数|流水线|每.*件|满.*箱|count|ctu|conveyor/i.test(text);
-  const hasTrafficLight = /红绿灯|交通灯|信号灯|traffic/i.test(text);
+  const hasTrafficLight = !/十字路口|南北.*东西/i.test(scenario) && /红绿灯|交通灯|信号灯|traffic/i.test(text);
   const hasSequencer = /顺序|流程|step|循环/i.test(text);
   const hasEmergency = /急停|安全|e-stop|遇阻/i.test(text);
   
@@ -27,7 +32,7 @@ export const detectLogic = (scenario: string): LogicConfig => {
     /(一个开关|同一个开关|单个开关)/i.test(text) &&
     /3\\s*秒.*(再次|重新).*按下|关闭.*3\\s*秒.*(再次|重新).*打开/i.test(text);
   const hasPump = /泵|抽水|供水|排水/i.test(text) && !hasMixingTank;
-  const hasMotor = /电机|马达|驱动|伺服|风扇|传送带/i.test(text) && !hasStarDelta && !hasGarageDoor && !hasCounting && !hasElevator;
+  const hasMotor = /电机|马达|驱动|伺服|风扇|传送带/i.test(text) && !hasStarDelta && !hasGarageDoor && !hasCounting && !hasElevator && !/汽油发动机|柴油发动机|发动机组/i.test(scenario);
 
   let scenarioType: LogicConfig['scenarioType'] = 'general';
   if (hasTrafficLight) scenarioType = 'traffic';
@@ -49,7 +54,34 @@ export const detectLogic = (scenario: string): LogicConfig => {
   };
 };
 
+function defaultLogicConfig(): LogicConfig {
+  return {
+    hasStartStop: false,
+    hasInterlock: false,
+    hasDelayOn: false,
+    hasDoublePressStart: false,
+    hasCounting: false,
+    hasTrafficLight: false,
+    hasSequencer: false,
+    hasEmergency: false,
+    hasLighting: false,
+    hasMotor: false,
+    hasPump: false,
+    hasStarDelta: false,
+    hasGarageDoor: false,
+    hasMixingTank: false,
+    hasElevator: false,
+    hasPID: false,
+    scenarioType: 'general',
+  };
+}
+
 export const generateSolution = (logic: LogicConfig, scenarioText: string): GeneratedSolution => {
+  const homeworkKind = detectHomeworkKind(scenarioText);
+  if (homeworkKind) {
+    return generateHomeworkSolution(homeworkKind);
+  }
+
   const io: IOPoint[] = [];
   const hardware: HardwareItem[] = [];
   let stl = "";
@@ -980,6 +1012,12 @@ export const runPlcCycle = (
     if (motorSpeed !== 0) applyMotorPhysics(state, motorSpeed);
 
     // --- SCENARIO LOGIC Execution & Physics ---
+
+    const homeworkKind = homeworkKindFromLogic(logic);
+    if (homeworkKind) {
+        runHomeworkPlcCycle(homeworkKind, state, dtMs, getIn, setOut);
+        return state;
+    }
 
     if (logic.hasElevator) {
         // ... (Elevator Logic)

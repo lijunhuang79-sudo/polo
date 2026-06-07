@@ -39,7 +39,15 @@ export interface LogicConfig {
   hasMixingTank: boolean;
   hasElevator: boolean;
   hasPID: boolean;
-  scenarioType: 'general' | 'lighting' | 'motor' | 'pump' | 'traffic' | 'door' | 'tank' | 'elevator' | 'pid';
+  /** 场景：比较指令三组灯 30s 循环（绿/蓝/红） */
+  hasComparisonLights?: boolean;
+  /** 场景：十字路口交通灯（南北/东西、自动+手动） */
+  hasCrossTraffic?: boolean;
+  /** 场景：机械手 A/B 工作台搬运（步序控制） */
+  hasRobotArm?: boolean;
+  /** 场景：双发动机 + 散热风扇 TOF 延时关闭 */
+  hasEngineFan?: boolean;
+  scenarioType: 'general' | 'lighting' | 'motor' | 'pump' | 'traffic' | 'door' | 'tank' | 'elevator' | 'pid' | 'homework';
 }
 
 export interface PLCState {

@@ -71,8 +71,19 @@ export function inferLogicFromSolution(
   const hasPump = /\b(泵|pump|供水|排水)\b/i.test(combined) && !hasMixingTank;
   const hasSequencer = /\b(step|顺序|流程|sequencer)\b/i.test(combined);
 
+  // 场景推断
+  const hasComparisonLights =
+    /\b(vw10|t_sec|hl_green|hl_blue|hl_red|三组|比较指令)\b/i.test(combined);
+  const hasCrossTraffic =
+    /\b(ns_red|ns_yel|ew_red|ew_grn|sb1_auto|sb4_ew|南北.*东西|十字路口)\b/i.test(combined);
+  const hasRobotArm =
+    /\b(out_up|out_down|out_clamp|out_right|机械手|step=1)\b/i.test(combined);
+  const hasEngineFan =
+    /\b(gasengine|dieselengine|gasstart|汽油|柴油|fan_10s|tof)\b/i.test(combined);
+
   let scenarioType: LogicConfig['scenarioType'] = 'general';
-  if (hasTrafficLight) scenarioType = 'traffic';
+  if (hasComparisonLights || hasCrossTraffic || hasRobotArm || hasEngineFan) scenarioType = 'homework';
+  else if (hasTrafficLight) scenarioType = 'traffic';
   else if (hasGarageDoor) scenarioType = 'door';
   else if (hasMixingTank) scenarioType = 'tank';
   else if (hasElevator) scenarioType = 'elevator';
@@ -101,6 +112,10 @@ export function inferLogicFromSolution(
   if (hasMixingTank) out.hasMixingTank = true;
   if (hasElevator) out.hasElevator = true;
   if (hasPID) out.hasPID = true;
+  if (hasComparisonLights) out.hasComparisonLights = true;
+  if (hasCrossTraffic) out.hasCrossTraffic = true;
+  if (hasRobotArm) out.hasRobotArm = true;
+  if (hasEngineFan) out.hasEngineFan = true;
 
   return out;
 }

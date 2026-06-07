@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw, Copy } from 'lucide-react';
-import { SCENARIOS } from './constants';
+import { Settings, Cpu, Cog, Zap, Activity, Circle, Square, LayoutTemplate, Box, Bot, HardDrive, Key, Loader2, CheckCircle, XCircle, Ban, Save, Download, Info, ShieldAlert, Lock, RotateCcw, Copy, FileText } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { SCENARIOS, TEXTBOOK_SCENARIOS, ALL_SCENARIOS, isTextbookScenarioText } from './constants';
 import { detectLogic, generateSolution, runPlcCycle } from './services/plcLogic';
 import { validateAndNormalizeSolution, ensureProgramComplete, ensureBomMatchesIo } from './services/aiSolutionValidator';
 import { inferLogicFromSolution } from './services/inferLogicFromSolution';
@@ -27,6 +28,15 @@ import {
   getStoredPendingPayment,
   setStoredPendingPayment,
 } from './services/entitlement';
+import {
+  buildScenarioPrintHtml,
+  buildScenarioSclSource,
+  buildScenarioTxtDocument,
+  downloadTextFile,
+  openPrintPdf,
+  resolveScenarioTitle,
+  scenarioExportBasename,
+} from './services/scenarioExport';
 // Vite 环境变量：开发模式默认免登录
 const _env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
 const APP_DISPLAY_NAME = _env.VITE_APP_NAME ?? 'PLC 编程仿真器';
@@ -124,7 +134,9 @@ const App: React.FC = () => {
   /** 免费档下当前输入是否为「启保停控制」或「延时启动」的完整文案，如是则允许使用本地生成 */
   const isCurrentScenarioFree = ENABLE_TIERED_PAYWALL && SCENARIOS.some((s) => isFreeScenario(s.title) && s.text.trim() === scenarioText.trim());
   /** 免费档是否允许点击一键生成：仅当本地模式且当前为 2 个免费场景之一时允许 */
-  const freeTierCanGenerate = !hasBasic && genMode === 'local' && isCurrentScenarioFree;
+  const isCurrentScenarioTextbook = isTextbookScenarioText(scenarioText);
+  const textbookScenarioLocked = ENABLE_TIERED_PAYWALL && isCurrentScenarioTextbook && !hasAiValid;
+  const freeTierCanGenerate = !hasBasic && genMode === 'local' && isCurrentScenarioFree && !isCurrentScenarioTextbook;
 
   // Simulation Loop Refs
   const stateRef = useRef<PLCState>(InitialState);
@@ -168,6 +180,7 @@ const App: React.FC = () => {
     setPurchaseProductType(pending.productType);
     setPendingOrderId(pending.orderId);
     setPendingOrderAmount(pending.amount);
+    setPendingPayQrContent(pending.payQrContent || null);
     setShowPurchaseModal(true);
   }, [ENABLE_TIERED_PAYWALL]);
 
@@ -206,7 +219,12 @@ const App: React.FC = () => {
       setPendingOrderId(result.orderId);
       setPendingOrderAmount(result.amount ?? null);
       setPendingPayQrContent(result.payQrContent ?? null);
-      setStoredPendingPayment({ orderId: result.orderId, productType: purchaseProductType, amount: result.amount ?? null });
+      setStoredPendingPayment({
+        orderId: result.orderId,
+        productType: purchaseProductType,
+        amount: result.amount ?? null,
+        payQrContent: result.payQrContent ?? null,
+      });
     } else {
       setOrderError(result.error || result.code || '创建订单失败');
       setOrderErrorCode(result.code || '');
@@ -496,6 +514,31 @@ const App: React.FC = () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const getScenarioTitle = () => resolveScenarioTitle(scenarioText, ALL_SCENARIOS);
+
+  const handleExportTxt = () => {
+    if (!solution) return;
+    const title = getScenarioTitle();
+    const base = scenarioExportBasename(title);
+    const content = buildScenarioTxtDocument(title, scenarioText, solution, codeTab);
+    downloadTextFile(`${base}_${codeTab}.txt`, content);
+  };
+
+  const handleExportPdf = () => {
+    if (!solution) return;
+    const title = getScenarioTitle();
+    const html = buildScenarioPrintHtml(title, scenarioText, solution, codeTab);
+    openPrintPdf(html);
+  };
+
+  const handleExportScl = () => {
+    if (!solution?.sclCode) return;
+    const title = getScenarioTitle();
+    const base = scenarioExportBasename(title);
+    const content = buildScenarioSclSource(title, scenarioText, solution.sclCode);
+    downloadTextFile(`${base}.scl`, content, 'text/plain;charset=utf-8');
   };
 
   const handleGenerate = async () => {
@@ -970,12 +1013,44 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          <div className="mt-3 bg-indigo-50/60 rounded-lg border border-indigo-100 overflow-hidden">
+            <div className="px-4 py-3 border-b border-indigo-100 flex flex-wrap items-center gap-2">
+              <span className="uppercase tracking-wider text-indigo-700 text-sm font-bold">📘 教科书场景示例</span>
+              {ENABLE_TIERED_PAYWALL && !hasAiValid && (
+                <span className="text-xs text-indigo-600/80">开通 AI 智能生成后解锁</span>
+              )}
+            </div>
+            <div className="px-4 py-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {TEXTBOOK_SCENARIOS.map((item, idx) => {
+                  const aiLocked = ENABLE_TIERED_PAYWALL && !hasAiValid;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => !aiLocked && setScenarioText(item.text)}
+                      disabled={aiLocked}
+                      className={`text-left text-xs sm:text-sm px-2 sm:px-3 py-2 rounded transition-all truncate touch-manipulation min-h-[40px] flex items-center gap-1 ${
+                        aiLocked
+                          ? 'text-slate-400 bg-slate-100 cursor-not-allowed border border-slate-200'
+                          : 'text-indigo-800 hover:text-indigo-600 hover:bg-white border border-transparent hover:border-indigo-200 hover:shadow-sm'
+                      }`}
+                      title={aiLocked ? '购买 AI 周卡 19.9 元解锁教科书场景' : item.text}
+                    >
+                      {aiLocked && <Lock size={12} className="shrink-0" />}
+                      <span className="truncate">• {item.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div className="mt-6 flex flex-col sm:flex-row gap-3">
              {ENABLE_TIERED_PAYWALL && (
                <div className="flex flex-wrap items-center gap-2">
                  {!hasBasic && (
                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
-                     升级基础版 9.9 元可解锁「本地生成」与全部场景；购买 19.9 元 AI 周卡可获得永久「本地生成」全部场景 + 7 天「AI 智能生成」，无需先购基础版。
+                     升级基础版 9.9 元可解锁「本地生成」与典型场景；购买 19.9 元 AI 周卡可解锁「教科书场景示例」及 7 天「AI 智能生成」，AI 周卡另赠永久本地生成全部典型场景。
                    </p>
                  )}
                  {!hasBasic && (
@@ -1009,16 +1084,24 @@ const App: React.FC = () => {
              )}
              <button 
                 onClick={handleGenerate}
-                disabled={isGenerating || (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && hasBasic && genMode === 'ai' && !hasAiValid)}
+                disabled={isGenerating || textbookScenarioLocked || (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && hasBasic && genMode === 'ai' && !hasAiValid)}
                 className={`text-white px-6 sm:px-8 py-3 sm:py-2.5 rounded-lg font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 touch-manipulation min-h-[48px] ${
-                  (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)
+                  textbookScenarioLocked || (ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate) || (ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid)
                     ? 'bg-slate-400 cursor-not-allowed'
                     : isGenerating ? 'bg-slate-400 cursor-not-allowed' : (genMode === 'ai' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30')
                 }`}
-                title={ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '请先升级基础版或选择免费场景（启保停/延时启动）' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '请先购买 AI 周卡' : undefined}
+                title={
+                  textbookScenarioLocked
+                    ? '教科书场景需购买 AI 周卡解锁'
+                    : ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate
+                      ? '请先升级基础版或选择免费典型场景（启保停/延时启动）'
+                      : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid
+                        ? '请先购买 AI 周卡'
+                        : undefined
+                }
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
-               {ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
+               {textbookScenarioLocked ? '购买 AI 周卡解锁教科书场景' : ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
              </button>
              <button 
                 onClick={() => {
@@ -1142,6 +1225,35 @@ const App: React.FC = () => {
                    <Copy size={16} />
                    {copySuccess ? '已复制' : '复制代码'}
                  </button>
+                 <button
+                   type="button"
+                   onClick={handleExportTxt}
+                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-colors shrink-0 touch-manipulation min-h-[44px] sm:min-h-0"
+                   title="导出当前语言的 TXT 文档"
+                 >
+                   <FileText size={16} />
+                   导出 TXT
+                 </button>
+                 <button
+                   type="button"
+                   onClick={handleExportPdf}
+                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-colors shrink-0 touch-manipulation min-h-[44px] sm:min-h-0"
+                   title="打开打印预览，左下角 PDF → 存储为 PDF（Mac 推荐）"
+                 >
+                   <Download size={16} />
+                   导出 PDF
+                 </button>
+                 {codeTab === 'SCL' && solution.sclCode && solution.sclCode.trim().length > 20 && (
+                   <button
+                     type="button"
+                     onClick={handleExportScl}
+                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition-colors shrink-0 touch-manipulation min-h-[44px] sm:min-h-0"
+                     title="导出博途可导入的 .scl 源文件"
+                   >
+                     <FileText size={16} />
+                     导出 SCL
+                   </button>
+                 )}
                  </div>
                </div>
                <div className="relative">
@@ -1172,6 +1284,7 @@ const App: React.FC = () => {
                </div>
             </section>
 
+            {genMode !== 'ai' && (
             <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center flex-wrap gap-3 mb-4">
                  <h2 className="text-base sm:text-lg font-bold text-slate-800">04. 现场电气柜仿真</h2>
@@ -1195,6 +1308,7 @@ const App: React.FC = () => {
               logic={solution.logicConfig} 
             />
             </section>
+            )}
             <section className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
                <h2 className="text-base sm:text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
                 <span className="bg-blue-100 text-blue-600 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center text-xs sm:text-sm shrink-0">06</span> 
@@ -1319,7 +1433,16 @@ const App: React.FC = () => {
                   </button>
                 </div>
                 <div className="mb-2 flex justify-center">
-                  <img src={ALIPAY_QR_IMAGE} alt="支付宝收款码" className="max-w-[200px] w-full rounded-lg shadow" />
+                  {pendingPayQrContent ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <QRCodeSVG value={pendingPayQrContent} size={200} level="M" includeMargin />
+                      <a href={pendingPayQrContent} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline break-all text-center">
+                        点击打开支付宝支付页
+                      </a>
+                    </div>
+                  ) : (
+                    <img src={ALIPAY_QR_IMAGE} alt="支付宝收款码" className="max-w-[200px] w-full rounded-lg shadow" />
+                  )}
                 </div>
                 <p className="text-xs text-slate-600 text-center mb-1.5">扫码付 {purchaseProductType === 'basic' ? '9.9' : '19.9'} 元，付完后把订单号发送到微信 elicwinner 确认。</p>
                 {!IS_LOCALHOST && <p className="text-xs text-slate-500 text-center mb-2">确认后可在本页点击「查看订单状态」取激活码。</p>}
