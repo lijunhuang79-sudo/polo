@@ -63,10 +63,10 @@ cd "$REPO_ROOT"
 
 # 2. 前端依赖与构建（必须装 devDependencies，否则 vite 等构建工具找不到）
 echo "Installing frontend deps and building..."
-export NODE_ENV=production
 load_dotenv ".env.production"
+# 注意：npm ci 前不要 export NODE_ENV=production，否则 devDependencies（vite）不会被安装
 npm ci
-npm run build
+NODE_ENV=production npm run build
 
 if [ ! -d dist ]; then
   echo "ERROR: dist/ not found after build. Aborting."
