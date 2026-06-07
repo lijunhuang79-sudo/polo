@@ -9,6 +9,31 @@
 #   /var/www/plc-sim/polo/deploy/scripts/deploy-polo.sh
 
 set -e
+
+# 安全加载 KEY=VALUE 环境文件（支持值中含空格、中文；避免 export $(grep|xargs) 拆词失败）
+load_dotenv() {
+  local env_file="$1"
+  [ -f "$env_file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    line="${line#export }"
+    [[ "$line" != *"="* ]] && continue
+    local key="${line%%=*}"
+    local value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    export "${key}=${value}"
+  done < "$env_file"
+}
+
 REPO_URL="${REPO_URL:-https://github.com/lijunhuang79-sudo/polo.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 # 仓库克隆/拉取根目录（与 Nginx root 的父目录一致）
@@ -39,9 +64,7 @@ cd "$REPO_ROOT"
 # 2. 前端依赖与构建（必须装 devDependencies，否则 vite 等构建工具找不到）
 echo "Installing frontend deps and building..."
 export NODE_ENV=production
-if [ -f .env.production ]; then
-  export $(grep -v '^#' .env.production | xargs)
-fi
+load_dotenv ".env.production"
 npm ci
 npm run build
 
