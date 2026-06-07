@@ -40,8 +40,8 @@ if (auth) {
     if (res.ok && (data.ok || data.license_key || data.token)) {
       console.log('模拟到账成功');
       if (data.license_key) console.log('基础版授权码:', data.license_key);
-      if (data.token) console.log('AI 周卡 token:', data.token);
-      if (data.validUntil) console.log('AI 周卡有效期至:', data.validUntil);
+      if (data.token) console.log('AI 月卡 token:', data.token);
+      if (data.validUntil) console.log('AI 月卡有效期至:', data.validUntil);
       if (data.message) console.log(data.message);
     } else {
       console.error('失败:', data.error || data.message || res.statusText || res.status);

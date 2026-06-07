@@ -24,7 +24,6 @@ import {
   setStoredBasicLicense,
   setStoredAiToken,
   setStoredAiValidUntil,
-  setStoredAiWeekUnlocksLocal,
   getStoredPendingPayment,
   setStoredPendingPayment,
 } from './services/entitlement';
@@ -128,7 +127,7 @@ const App: React.FC = () => {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [copyPurchaseSuccess, setCopyPurchaseSuccess] = useState(false);
   const [copyOrderIdSuccess, setCopyOrderIdSuccess] = useState(false);
-  // 基础版 或 曾购买过 AI 周卡：永久本地生成全部场景；AI 生成仅 7 天内有效
+  // 基础版永久本地生成；AI 月卡仅 30 天内 AI 智能生成与教科书场景（旧版 AI 周卡本地解锁标志仍兼容）
   const hasBasic = !ENABLE_TIERED_PAYWALL || !!basicLicense || getStoredAiWeekUnlocksLocal();
   const hasAiValid = !ENABLE_TIERED_PAYWALL || (aiValidUntil != null && aiValidUntil > Date.now());
   /** 免费档下当前输入是否为「启保停控制」或「延时启动」的完整文案，如是则允许使用本地生成 */
@@ -211,7 +210,7 @@ const App: React.FC = () => {
     setOrderError('');
     setOrderErrorCode('');
     setCreatingOrder(true);
-    // AI 周卡不传 basicLicenseKey，后端不要求先购基础版
+    // AI 月卡不传 basicLicenseKey，后端不要求先购基础版
     const basicKey = purchaseProductType === 'ai_week' ? undefined : (basicLicense || getStoredBasicLicense() || undefined);
     const result = await createOrder(purchaseProductType, basicKey);
     setCreatingOrder(false);
@@ -257,7 +256,6 @@ const App: React.FC = () => {
         setSuccessResult({ type: 'ai_week', token: result.token, validUntil: result.validUntil });
         setStoredAiToken(result.token);
         setStoredAiValidUntil(new Date(result.validUntil).getTime());
-        setStoredAiWeekUnlocksLocal();
         setAiValidUntil(new Date(result.validUntil).getTime());
         setShowPurchaseModal(false);
         setPendingOrderId('');
@@ -294,7 +292,6 @@ const App: React.FC = () => {
         setSuccessResult({ type: 'ai_week', token: result.token, validUntil: result.validUntil });
         setStoredAiToken(result.token);
         setStoredAiValidUntil(new Date(result.validUntil).getTime());
-        setStoredAiWeekUnlocksLocal();
         setAiValidUntil(new Date(result.validUntil).getTime());
         setShowPurchaseModal(false);
         setPendingOrderId('');
@@ -877,7 +874,7 @@ const App: React.FC = () => {
                   <button 
                     onClick={() => hasAiValid && setGenMode('ai')}
                     className={`flex-1 min-w-0 md:flex-none flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2.5 rounded-md text-xs sm:text-sm font-bold transition-all touch-manipulation min-h-[44px] truncate ${genMode === 'ai' ? 'bg-indigo-600 shadow text-white' : hasAiValid ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 cursor-default'}`}
-                    title={!hasAiValid ? '请先购买 19.9 元 AI 周卡' : undefined}
+                    title={!hasAiValid ? '请先购买 19.9 元 AI 月卡' : undefined}
                   >
                     <Bot size={16} className="shrink-0" /> <span className="truncate">AI 智能生成</span>
                   </button>
@@ -1034,7 +1031,7 @@ const App: React.FC = () => {
                           ? 'text-slate-400 bg-slate-100 cursor-not-allowed border border-slate-200'
                           : 'text-indigo-800 hover:text-indigo-600 hover:bg-white border border-transparent hover:border-indigo-200 hover:shadow-sm'
                       }`}
-                      title={aiLocked ? '购买 AI 周卡 19.9 元解锁教科书场景' : item.text}
+                      title={aiLocked ? '购买 AI 月卡 19.9 元解锁教科书场景' : item.text}
                     >
                       {aiLocked && <Lock size={12} className="shrink-0" />}
                       <span className="truncate">• {item.title}</span>
@@ -1050,7 +1047,7 @@ const App: React.FC = () => {
                <div className="flex flex-wrap items-center gap-2">
                  {!hasBasic && (
                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
-                     升级基础版 9.9 元可解锁「本地生成」与典型场景；购买 19.9 元 AI 周卡可解锁「教科书场景示例」及 7 天「AI 智能生成」，AI 周卡另赠永久本地生成全部典型场景。
+                     升级基础版 9.9 元可解锁「本地生成」与典型场景；购买 19.9 元 AI 月卡可解锁「教科书场景示例」及 30 天「AI 智能生成」。
                    </p>
                  )}
                  {!hasBasic && (
@@ -1067,7 +1064,7 @@ const App: React.FC = () => {
                        onClick={() => openPurchaseModal('ai_week')}
                        className="px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white shadow-sm transition-colors"
                      >
-                       购买 AI 周卡 19.9 元
+                       购买 AI 月卡 19.9 元
                      </button>
                    </>
                  )}
@@ -1077,7 +1074,7 @@ const App: React.FC = () => {
                      onClick={() => openPurchaseModal('ai_week')}
                      className="px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white shadow-sm transition-colors"
                    >
-                     购买 AI 周卡 19.9 元
+                     购买 AI 月卡 19.9 元
                    </button>
                  )}
                </div>
@@ -1092,16 +1089,16 @@ const App: React.FC = () => {
                 }`}
                 title={
                   textbookScenarioLocked
-                    ? '教科书场景需购买 AI 周卡解锁'
+                    ? '教科书场景需购买 AI 月卡解锁'
                     : ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate
                       ? '请先升级基础版或选择免费典型场景（启保停/延时启动）'
                       : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid
-                        ? '请先购买 AI 周卡'
+                        ? '请先购买 AI 月卡'
                         : undefined
                 }
              >
                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : (genMode === 'ai' ? <Bot size={18} /> : <Cpu size={18} />)}
-               {textbookScenarioLocked ? '购买 AI 周卡解锁教科书场景' : ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 周卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
+               {textbookScenarioLocked ? '购买 AI 月卡解锁教科书场景' : ENABLE_TIERED_PAYWALL && !hasBasic && !freeTierCanGenerate ? '升级后可用' : ENABLE_TIERED_PAYWALL && genMode === 'ai' && !hasAiValid ? '购买 AI 月卡后可用' : isGenerating ? '正在生成PLC程序...' : '一键生成PLC程序'}
              </button>
              <button 
                 onClick={() => {
@@ -1385,7 +1382,7 @@ const App: React.FC = () => {
           <div className="bg-white rounded-xl max-w-sm w-full max-h-[90vh] overflow-y-auto shadow-xl p-4 text-left relative flex-shrink-0" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between gap-2 mb-2">
               <h3 className="text-base font-bold text-slate-800">
-                {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 周卡 19.9 元'}
+                {purchaseProductType === 'basic' ? '购买基础版 9.9 元' : '购买 AI 月卡 19.9 元'}
               </h3>
               <button type="button" onClick={closePurchaseModal} className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-lg leading-none" aria-label="关闭">×</button>
             </div>
@@ -1394,13 +1391,13 @@ const App: React.FC = () => {
                 <p className="text-sm text-slate-600 mb-4">
                   {purchaseProductType === 'basic'
                     ? '支付后将获得基础版授权码，可解锁「本地生成」与全部场景。'
-                    : '支付后将获得 AI 周卡链接：永久「本地生成」全部场景 + 7 天「AI 智能生成」，无需先购基础版。'}
+                    : '支付后将获得 AI 月卡链接：30 天内可使用「AI 智能生成」与「教科书场景示例」，无需先购基础版。'}
                 </p>
                 {orderError && (
                   <div className="mb-3 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                     {orderError}
                     {orderErrorCode === 'BASIC_REQUIRED' && purchaseProductType === 'ai_week' && (
-                      <span className="block mt-2 text-xs text-amber-700">当前已支持直接购买 AI 周卡，无需先购基础版。若仍提示此错误，请重启后端（backend 目录下 npm run dev）后再试。</span>
+                      <span className="block mt-2 text-xs text-amber-700">当前已支持直接购买 AI 月卡，无需先购基础版。若仍提示此错误，请重启后端（backend 目录下 npm run dev）后再试。</span>
                     )}
                     <span className="block mt-2 text-xs text-slate-600 font-medium">排查：请确认 ① 前端用 npm run dev 打开的是 http://localhost:5173 或 http://127.0.0.1:5173；② 点击「去支付」后，运行后端的终端里是否出现一行 <code className="bg-slate-200 px-1 rounded">[order/create] 收到请求</code>。若没有，说明请求未打到当前后端。</span>
                     <span className="block mt-1 text-xs text-red-600">请确认后端已启动（backend 目录下 npm run dev，默认端口 3001），且 .env 中 VITE_APP_API_BASE=http://localhost:3001</span>
@@ -1485,8 +1482,8 @@ const App: React.FC = () => {
               </>
             ) : (
               <>
-                <p className="text-sm text-slate-600 mb-2">请保存您的 AI 周卡链接：</p>
-                <p className="text-xs text-slate-500 mb-1">您已永久拥有「本地生成」全部场景；此链接 7 天内有效，打开即可使用「AI 智能生成」。</p>
+                <p className="text-sm text-slate-600 mb-2">请保存您的 AI 月卡链接：</p>
+                <p className="text-xs text-slate-500 mb-1">此链接 30 天内有效，打开即可使用「AI 智能生成」与「教科书场景示例」。</p>
                 <div className="flex items-center gap-2 mb-2">
                   <code className="flex-1 bg-slate-100 px-3 py-2 rounded-lg text-xs break-all">{typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?t=${successResult.token}` : `?t=${successResult.token}`}</code>
                   <button type="button" onClick={() => copyToClipboard(typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?t=${successResult.token}` : `?t=${successResult.token}`)} className="shrink-0 px-3 py-2 rounded-lg bg-slate-200 hover:bg-slate-300 text-sm font-medium">

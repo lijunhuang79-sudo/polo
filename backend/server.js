@@ -2,11 +2,12 @@
  * PLC-Sim API 服务
  * 运行在 3000 端口，供 api.plc-sim.com 反向代理
  * API Key 仅从环境变量读取，永不返回给前端
- * 三档收费：订单、基础版授权、AI 周卡 token（当前为内存存储，可后续改为 DB）
+ * 三档收费：订单、基础版授权、AI 月卡 token（表名 ai_week_tokens 保留兼容）
  */
 import http from 'http';
 import crypto from 'crypto';
 import { parse as parseUrl } from 'url';
+import { URLSearchParams } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -57,6 +58,24 @@ if (existsSync(envPath)) {
 }
 
 const PORT = Number(process.env.PORT) || 3001;
+const ALIPAY_GATEWAY = process.env.ALIPAY_GATEWAY || 'https://openapi.alipay.com/gateway.do';
+const ALIPAY_APP_ID = (process.env.ALIPAY_APP_ID || '').trim();
+const ALIPAY_NOTIFY_URL = (process.env.ALIPAY_NOTIFY_URL || '').trim();
+const ALIPAY_RETURN_URL = (process.env.ALIPAY_RETURN_URL || '').trim();
+const ALIPAY_APP_PRIVATE_KEY = normalizePemKey(process.env.ALIPAY_APP_PRIVATE_KEY || '', 'private');
+const ALIPAY_PUBLIC_KEY = normalizePemKey(process.env.ALIPAY_PUBLIC_KEY || '', 'public');
+const ALIPAY_ENABLED = String(process.env.ALIPAY_ENABLED || '').trim().toLowerCase() === 'true';
+
+function normalizePemKey(value, keyType) {
+  if (!value) return '';
+  const normalized = value.replace(/\\n/g, '\n').trim();
+  if (normalized.includes('BEGIN ') && normalized.includes('END ')) return normalized;
+  // 支持支付宝控制台复制的单行 Base64 密钥，自动包装为 PEM
+  const compact = normalized.replace(/\s+/g, '');
+  const body = compact.match(/.{1,64}/g)?.join('\n') || compact;
+  if (keyType === 'private') return `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+  return `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----`;
+}
 
 const SYSTEM_PROMPT = `You are an expert PLC engineer.
 
@@ -227,7 +246,12 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'https://www.plc-sim.com,https
 const DEFAULT_CORS_ORIGIN = CORS_ORIGINS[0] || 'https://www.plc-sim.com';
 
 function getCorsOrigin(req) {
-  const origin = req.headers?.origin || '';
+  const origin = (req.headers?.origin || '').trim();
+  const host = (req.headers?.host || '').trim();
+  const isLocalBackend = host.indexOf('localhost') !== -1 || host.indexOf('127.0.0.1') !== -1;
+  // 本地后端：Origin 为空、null 或 file 时允许任意来源，避免模拟到账页从 file:// 或异常来源打开时 Load failed
+  if (isLocalBackend && (!origin || origin === 'null' || origin.toLowerCase().indexOf('file') === 0))
+    return '*';
   return origin && CORS_ORIGINS.includes(origin) ? origin : DEFAULT_CORS_ORIGIN;
 }
 
@@ -278,13 +302,13 @@ function getOrderById(orderId) {
   return stmt.get(orderId);
 }
 
-function updateOrderPaid(orderId) {
+function updateOrderPaid(orderId, { payChannel = 'simulate', buyerId = null } = {}) {
   const stmt = db.prepare(`
     UPDATE orders
-    SET pay_status = 'paid', pay_time = ?, pay_channel = 'simulate'
+    SET pay_status = 'paid', pay_time = ?, pay_channel = ?, buyer_id = ?
     WHERE id = ?
   `);
-  stmt.run(Date.now(), orderId);
+  stmt.run(Date.now(), payChannel, buyerId, orderId);
 }
 
 function insertBasicLicense({ id, orderId, licenseKey }) {
@@ -303,6 +327,160 @@ function insertAiWeekToken({ id, orderId, token, validFrom, validUntil }) {
   stmt.run(id, orderId, token, validFrom, validUntil, Date.now());
 }
 
+function issueOrderEntitlements(order) {
+  if (order.product_type === 'basic') {
+    const existing = db.prepare('SELECT license_key FROM basic_licenses WHERE order_id = ?').get(order.id);
+    if (existing?.license_key) return { license_key: existing.license_key };
+    const license_key = genLicenseKey();
+    insertBasicLicense({ id: genId(), orderId: order.id, licenseKey: license_key });
+    return { license_key };
+  }
+  if (order.product_type === 'ai_week') {
+    const existing = db.prepare('SELECT token, valid_until FROM ai_week_tokens WHERE order_id = ?').get(order.id);
+    if (existing?.token) {
+      return { token: existing.token, validUntil: new Date(existing.valid_until).toISOString() };
+    }
+    const now = Date.now();
+    const valid_until = now + 30 * 24 * 60 * 60 * 1000;
+    const token = genAiToken();
+    insertAiWeekToken({ id: genId(), orderId: order.id, token, validFrom: now, validUntil: valid_until });
+    return { token, validUntil: new Date(valid_until).toISOString() };
+  }
+  return {};
+}
+
+function formatAlipayDate(ts = Date.now()) {
+  const d = new Date(ts);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+
+function buildAlipaySignContent(params) {
+  return Object.keys(params)
+    .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== '' && key !== 'sign')
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join('&');
+}
+
+function signAlipayParams(params) {
+  if (!ALIPAY_APP_PRIVATE_KEY) throw new Error('ALIPAY_APP_PRIVATE_KEY 未配置');
+  const signContent = buildAlipaySignContent(params);
+  return crypto.createSign('RSA-SHA256').update(signContent, 'utf8').sign(ALIPAY_APP_PRIVATE_KEY, 'base64');
+}
+
+function verifyAlipaySign(params, sign) {
+  if (!ALIPAY_PUBLIC_KEY || !sign) return false;
+  const signContent = buildAlipaySignContent(params);
+  return crypto.createVerify('RSA-SHA256').update(signContent, 'utf8').verify(ALIPAY_PUBLIC_KEY, sign, 'base64');
+}
+
+function isAlipayReady() {
+  return ALIPAY_ENABLED && !!ALIPAY_APP_ID && !!ALIPAY_NOTIFY_URL && !!ALIPAY_APP_PRIVATE_KEY && !!ALIPAY_PUBLIC_KEY;
+}
+
+function getAlipayConfigStatus() {
+  const missing = [];
+  if (!ALIPAY_ENABLED) missing.push('ALIPAY_ENABLED');
+  if (!ALIPAY_APP_ID) missing.push('ALIPAY_APP_ID');
+  if (!ALIPAY_NOTIFY_URL) missing.push('ALIPAY_NOTIFY_URL');
+  if (!ALIPAY_APP_PRIVATE_KEY) missing.push('ALIPAY_APP_PRIVATE_KEY');
+  if (!ALIPAY_PUBLIC_KEY) missing.push('ALIPAY_PUBLIC_KEY');
+  return {
+    enabled: isAlipayReady(),
+    mode: isAlipayReady() ? 'alipay_page' : 'manual',
+    missing,
+    gateway: ALIPAY_GATEWAY,
+    notifyUrlConfigured: !!ALIPAY_NOTIFY_URL,
+    returnUrlConfigured: !!ALIPAY_RETURN_URL,
+  };
+}
+
+function createAlipayPagePayUrl({ orderId, amount, subject }) {
+  const bizContent = JSON.stringify({
+    out_trade_no: orderId,
+    total_amount: Number(amount).toFixed(2),
+    subject,
+    product_code: 'FAST_INSTANT_TRADE_PAY',
+  });
+  const params = {
+    app_id: ALIPAY_APP_ID,
+    method: 'alipay.trade.page.pay',
+    format: 'JSON',
+    charset: 'utf-8',
+    sign_type: 'RSA2',
+    timestamp: formatAlipayDate(),
+    version: '1.0',
+    notify_url: ALIPAY_NOTIFY_URL,
+    biz_content: bizContent,
+  };
+  if (ALIPAY_RETURN_URL) params.return_url = ALIPAY_RETURN_URL;
+  const sign = signAlipayParams(params);
+  const search = new URLSearchParams({ ...params, sign });
+  return `${ALIPAY_GATEWAY}?${search.toString()}`;
+}
+
+async function callAlipayApi(method, bizContent) {
+  const params = {
+    app_id: ALIPAY_APP_ID,
+    method,
+    format: 'JSON',
+    charset: 'utf-8',
+    sign_type: 'RSA2',
+    timestamp: formatAlipayDate(),
+    version: '1.0',
+    biz_content: JSON.stringify(bizContent),
+  };
+  const sign = signAlipayParams(params);
+  const body = new URLSearchParams({ ...params, sign }).toString();
+  const res = await fetch(ALIPAY_GATEWAY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+    body,
+  });
+  if (!res.ok) throw new Error(`Alipay HTTP ${res.status}`);
+  return res.json();
+}
+
+async function queryAlipayTrade(orderId) {
+  const data = await callAlipayApi('alipay.trade.query', { out_trade_no: orderId });
+  const root = data?.alipay_trade_query_response || {};
+  if (root.code !== '10000') {
+    return { ok: false, reason: root.sub_msg || root.msg || 'query failed', tradeStatus: root.trade_status || '' };
+  }
+  return {
+    ok: true,
+    tradeStatus: root.trade_status || '',
+    buyerId: root.buyer_user_id || null,
+    totalAmount: root.total_amount || null,
+  };
+}
+
+async function reconcileOrderWithAlipay(order) {
+  if (!order || order.pay_status === 'paid' || !isAlipayReady()) {
+    return { reconciled: false, reason: 'skip' };
+  }
+  const q = await queryAlipayTrade(order.id);
+  if (!q.ok) {
+    return { reconciled: false, reason: q.reason || 'query_failed', tradeStatus: q.tradeStatus || '' };
+  }
+  if (q.tradeStatus !== 'TRADE_SUCCESS' && q.tradeStatus !== 'TRADE_FINISHED') {
+    return { reconciled: false, reason: 'not_paid', tradeStatus: q.tradeStatus };
+  }
+  const paidAmount = Number(q.totalAmount || 0);
+  if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - Number(order.amount)) > 1e-6) {
+    return { reconciled: false, reason: 'amount_mismatch', tradeStatus: q.tradeStatus };
+  }
+  updateOrderPaid(order.id, { payChannel: 'alipay_query', buyerId: q.buyerId || null });
+  issueOrderEntitlements(order);
+  return { reconciled: true, tradeStatus: q.tradeStatus };
+}
+
 const server = http.createServer(async (req, res) => {
   const { pathname } = parseUrl(req.url || '', true);
 
@@ -319,6 +497,11 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
     res.end(JSON.stringify({ ok: true, service: 'plc-sim-api' }));
+    return;
+  }
+
+  if (pathname === '/api/order/payment-capability' && req.method === 'GET') {
+    send(res, req, 200, getAlipayConfigStatus());
     return;
   }
 
@@ -421,12 +604,23 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // AI 周卡无需先购买基础版，可直接购买
+    // AI 月卡无需先购买基础版，可直接购买
     const amount = productType === 'basic' ? 9.9 : 19.9;
     const orderId = genId();
     insertOrder({ id: orderId, productType, amount });
-    if (productType === 'ai_week') console.log('[order/create] AI 周卡订单已创建，无需基础版:', orderId);
-    send(res, req, 200, { orderId, amount, productType });
+    if (productType === 'ai_week') console.log('[order/create] AI 月卡订单已创建，无需基础版:', orderId);
+    let payQrContent = null;
+    let payChannel = 'manual';
+    if (isAlipayReady()) {
+      try {
+        const subject = productType === 'basic' ? 'PLC-Sim 基础版授权' : 'PLC-Sim AI月卡';
+        payQrContent = createAlipayPagePayUrl({ orderId, amount, subject });
+        payChannel = 'alipay_page';
+      } catch (e) {
+        console.error('[alipay] 生成支付链接失败，回退 manual 模式:', e?.message || e);
+      }
+    }
+    send(res, req, 200, { orderId, amount, productType, payQrContent, payChannel });
     return;
   }
 
@@ -437,10 +631,19 @@ const server = http.createServer(async (req, res) => {
       send(res, req, 400, { error: '缺少 orderId' });
       return;
     }
-    const order = getOrderById(orderId);
+    let order = getOrderById(orderId);
     if (!order) {
       send(res, req, 404, { error: '订单不存在' });
       return;
+    }
+    // 自动兜底确认：若异步回调偶发丢失，查询状态接口会主动向支付宝查单并自动入账
+    if (order.pay_status !== 'paid' && isAlipayReady()) {
+      try {
+        await reconcileOrderWithAlipay(order);
+        order = getOrderById(order.id) || order;
+      } catch (e) {
+        console.error('[alipay] status query fallback failed:', e?.message || e);
+      }
     }
     const out = { orderId: order.id, pay_status: order.pay_status, amount: order.amount, productType: order.product_type };
     if (order.pay_status === 'paid') {
@@ -477,23 +680,96 @@ const server = http.createServer(async (req, res) => {
       send(res, req, 200, { ok: true, message: '订单已支付' });
       return;
     }
-    updateOrderPaid(order.id);
+    updateOrderPaid(order.id, { payChannel: 'simulate' });
+    const payloadOut = issueOrderEntitlements(order);
+    send(res, req, 200, { ok: true, ...payloadOut });
+    return;
+  }
 
-    if (order.product_type === 'basic') {
-      const license_key = genLicenseKey();
-      insertBasicLicense({ id: genId(), orderId: order.id, licenseKey: license_key });
-      send(res, req, 200, { ok: true, license_key });
+  if (pathname === '/api/order/alipay-notify' && req.method === 'POST') {
+    const body = await readBody(req);
+    const form = new URLSearchParams(body);
+    const raw = {};
+    for (const [k, v] of form.entries()) raw[k] = v;
+    const sign = raw.sign || '';
+    const signType = raw.sign_type || '';
+    if (signType && signType !== 'RSA2') {
+      res.writeHead(400);
+      res.end('invalid sign_type');
       return;
     }
-    if (order.product_type === 'ai_week') {
-      const now = Date.now();
-      const valid_until = now + 7 * 24 * 60 * 60 * 1000;
-      const token = genAiToken();
-      insertAiWeekToken({ id: genId(), orderId: order.id, token, validFrom: now, validUntil: valid_until });
-      send(res, req, 200, { ok: true, token, validUntil: new Date(valid_until).toISOString() });
+    const verifyPayload = { ...raw };
+    delete verifyPayload.sign;
+    delete verifyPayload.sign_type;
+    if (!verifyAlipaySign(verifyPayload, sign)) {
+      res.writeHead(400);
+      res.end('invalid sign');
       return;
     }
-    send(res, req, 200, { ok: true });
+    if (raw.app_id !== ALIPAY_APP_ID) {
+      res.writeHead(400);
+      res.end('invalid app_id');
+      return;
+    }
+    const orderId = (raw.out_trade_no || '').trim();
+    if (!orderId) {
+      res.writeHead(400);
+      res.end('missing out_trade_no');
+      return;
+    }
+    const order = getOrderById(orderId);
+    if (!order) {
+      res.writeHead(404);
+      res.end('order not found');
+      return;
+    }
+    const paidAmount = Number(raw.total_amount || 0);
+    if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - Number(order.amount)) > 1e-6) {
+      res.writeHead(400);
+      res.end('amount mismatch');
+      return;
+    }
+    const tradeStatus = String(raw.trade_status || '');
+    if (tradeStatus !== 'TRADE_SUCCESS' && tradeStatus !== 'TRADE_FINISHED') {
+      res.writeHead(200);
+      res.end('success');
+      return;
+    }
+    if (order.pay_status !== 'paid') {
+      updateOrderPaid(order.id, { payChannel: 'alipay', buyerId: raw.buyer_id || null });
+    }
+    issueOrderEntitlements(order);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('success');
+    return;
+  }
+
+  if (pathname === '/api/order/reconcile' && req.method === 'POST') {
+    const body = await readBody(req);
+    const payload = parseJsonBody(body);
+    const orderId = (payload?.orderId || payload?.order_id || '').trim();
+    if (!orderId) {
+      send(res, req, 400, { error: '缺少 orderId' });
+      return;
+    }
+    const order = getOrderById(orderId);
+    if (!order) {
+      send(res, req, 404, { error: '订单不存在' });
+      return;
+    }
+    try {
+      const r = await reconcileOrderWithAlipay(order);
+      const after = getOrderById(orderId) || order;
+      send(res, req, 200, {
+        ok: true,
+        pay_status: after.pay_status,
+        reconciled: r.reconciled,
+        reason: r.reason || '',
+        tradeStatus: r.tradeStatus || '',
+      });
+    } catch (e) {
+      send(res, req, 502, { ok: false, error: e?.message || 'reconcile failed' });
+    }
     return;
   }
 

@@ -92,7 +92,7 @@
             if (r.ok && (r.data.ok || r.data.license_key || r.data.token)) {
               var lines = ['模拟到账成功'];
               if (r.data.license_key) lines.push('基础版授权码: ' + r.data.license_key);
-              if (r.data.token) lines.push('AI 周卡 token: ' + r.data.token);
+              if (r.data.token) lines.push('AI 月卡 token: ' + r.data.token);
               if (r.data.validUntil) lines.push('有效期至: ' + r.data.validUntil);
               showResult(true, lines.join('\n'));
             } else {

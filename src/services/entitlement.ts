@@ -1,12 +1,15 @@
 /**
- * 三档收费权益：免费档 / 基础版(9.9) / AI周卡(19.9)
+ * 三档收费权益：免费档 / 基础版(9.9) / AI月卡(19.9)
  * 本地存储 key、免费可用场景索引、授权与 token 校验（占位接口）
  */
+
+/** AI 月卡有效天数（与后端发放 token 一致） */
+export const AI_MONTH_VALIDITY_DAYS = 30;
 
 const STORAGE_BASIC = 'plc_tier_basic_license';
 const STORAGE_AI_TOKEN = 'plc_tier_ai_token';
 const STORAGE_AI_VALID_UNTIL = 'plc_tier_ai_valid_until';
-/** AI 周卡购买后永久解锁本地生成全部场景 */
+/** 旧版 AI 周卡购买后永久解锁本地生成（仅兼容历史本地标志，新购 AI 月卡不再写入） */
 const STORAGE_AI_WEEK_UNLOCKS_LOCAL = 'plc_tier_ai_week_unlocks_local';
 /** 待支付订单：用户关闭网页后重新进入时恢复弹窗 */
 const STORAGE_PENDING_PAYMENT = 'plc_tier_pending_payment';
@@ -16,6 +19,7 @@ export interface PendingPayment {
   orderId: string;
   productType: 'basic' | 'ai_week';
   amount: number | null;
+  payQrContent?: string | null;
 }
 
 export function getStoredPendingPayment(): PendingPayment | null {
@@ -101,7 +105,7 @@ export function hasBasicLicense(): boolean {
   return !!getStoredBasicLicense();
 }
 
-/** AI 周卡是否在有效期内 */
+/** AI 月卡是否在有效期内 */
 export function hasValidAiToken(): boolean {
   const until = getStoredAiValidUntil();
   return until != null && until > Date.now();
@@ -137,7 +141,7 @@ export async function activateBasicLicense(licenseKey: string): Promise<{ ok: bo
 }
 
 /**
- * 校验 AI 周卡 token（占位：调后端 /api/ai-token/validate，未接时本地模拟 7 天有效）
+ * 校验 AI 月卡 token（占位：调后端 /api/ai-token/validate，未接时本地模拟 30 天有效）
  */
 export async function validateAiToken(token: string): Promise<{ valid: boolean; validUntil?: number; message?: string }> {
   const t = token.trim();
@@ -150,15 +154,15 @@ export async function validateAiToken(token: string): Promise<{ valid: boolean; 
     const res = await fetch(`${url}?t=${encodeURIComponent(t)}`);
     const data = await res.json().catch(() => ({}));
     if (res.ok && data.valid) {
-      const until = data.validUntil ? new Date(data.validUntil).getTime() : Date.now() + 7 * 24 * 60 * 60 * 1000;
+      const until = data.validUntil ? new Date(data.validUntil).getTime() : Date.now() + AI_MONTH_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
       setStoredAiToken(t);
       setStoredAiValidUntil(until);
       return { valid: true, validUntil: until };
     }
     return { valid: false, message: data.message || data.error || '链接已失效' };
   } catch {
-    // 未接后端：演示用，任意 token 给 7 天
-    const until = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    // 未接后端：演示用，任意 token 给 30 天
+    const until = Date.now() + AI_MONTH_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
     setStoredAiToken(t);
     setStoredAiValidUntil(until);
     return { valid: true, validUntil: until };
@@ -175,7 +179,7 @@ function getApiBase(): string {
 }
 
 /**
- * 创建订单（基础版 9.9 / AI 周卡 19.9）。AI 周卡无需先购基础版，可不传 basicLicenseKey。
+ * 创建订单（基础版 9.9 / AI 月卡 19.9）。AI 月卡无需先购基础版，可不传 basicLicenseKey。
  */
 export async function createOrder(
   productType: 'basic' | 'ai_week',
